@@ -49,6 +49,7 @@ void ui_library_open(ui_library *lib, const ui_lib_item *items, int count, int *
     lib->host_count = 1;
     lib->host_list.count = 1;
     lib->source_list.count = 1; /* "Add source" */
+    lib->nas_list.count = 2;    /* "Scan the network", "Type an address" */
 }
 
 void ui_library_set_items(ui_library *lib, const ui_lib_item *items, int count, int *shown)
@@ -85,6 +86,49 @@ void ui_library_set_sources(ui_library *lib, const ui_lib_source *sources, int c
 int ui_library_source(const ui_library *lib)
 {
     return lib->source_list.cur - 1;
+}
+
+int ui_library_installed(const ui_library *lib)
+{
+    return lib->installed_list.cur;
+}
+
+void ui_library_set_nas(ui_library *lib, const ui_lib_nas *nas, int count, const char *status)
+{
+    lib->nas = nas;
+    lib->nas_count = count;
+    lib->nas_status = status;
+    keep_place(&lib->nas_list, count + 2);
+}
+
+void ui_library_browse(ui_library *lib, const char *title, const char *about,
+                       const ui_lib_entry *entries, int count, bool can_use)
+{
+    lib->browse = entries;
+    lib->browse_count = count;
+    lib->browse_use = can_use;
+    lib->browse_title = title;
+    lib->browse_about = about;
+    lib->browse_list = (ui_list){count + (can_use ? 1 : 0), 0, 0};
+    lib->page = UI_LIB_PAGE_BROWSE;
+}
+
+int ui_library_browse_entry(const ui_library *lib)
+{
+    return lib->browse_list.cur - (lib->browse_use ? 1 : 0);
+}
+
+void ui_library_nas_page(ui_library *lib)
+{
+    lib->page = UI_LIB_PAGE_NAS;
+}
+
+void ui_library_forget_nas_password(ui_library *lib)
+{
+    volatile char *p = lib->nas_password; /* a store the compiler can't drop */
+    for (size_t i = 0; i < sizeof lib->nas_password; i++) {
+        p[i] = '\0';
+    }
 }
 
 void ui_library_set_hosts(ui_library *lib, const ui_lib_host *hosts, int count)
@@ -267,6 +311,22 @@ static void ask(ui_library *lib, ui_lib_action what)
                        "Remove this line from the map? %s. Its games leave the list.",
                        lib->sources[ui_library_source(lib)].name);
         lib->dialog = (ui_dialog){"REMOVE SOURCE", lib->message, {"REMOVE", "CANCEL", NULL}, 1, 1};
+    } else if (what == UI_LIB_PLAY) {
+        const ui_lib_item *it = lib->section == UI_LIB_GAMES
+                                    ? &lib->items[ui_library_game(lib)]
+                                    : &lib->installed[ui_library_installed(lib)];
+        (void)snprintf(lib->message, sizeof lib->message,
+                       "Play %s? This app closes and the game starts.", it->name);
+        lib->dialog =
+            lib->section == UI_LIB_GAMES
+                ? (ui_dialog){"PLAY", lib->message, {"PLAY", "INSTALL AGAIN", "CANCEL"}, 0, 2}
+                : (ui_dialog){"PLAY", lib->message, {"PLAY", "CANCEL", NULL}, 0, 1};
+    } else if (what == UI_LIB_NAS_USE) {
+        (void)snprintf(lib->message, sizeof lib->message,
+                       "Add %s to your games? Its images, and those in the folders inside it, "
+                       "are listed in GAMES.",
+                       lib->browse_title != NULL ? lib->browse_title : "this folder");
+        lib->dialog = (ui_dialog){"ADD NAS FOLDER", lib->message, {"ADD", "CANCEL", NULL}, 0, 1};
     } else if (what == UI_LIB_SOURCE_KIND) {
         /* Three choices and no CANCEL: B gives 3, a choice past them, which adds nothing. */
         lib->dialog = (ui_dialog){"ADD SOURCE",
@@ -297,6 +357,18 @@ static void open_kbd(ui_library *lib, ui_lib_typing what)
         ui_kbd_open(&lib->kbd, labels[lib->add_kind], lib->add_url, sizeof lib->add_url, false);
     } else if (what == UI_LIB_TYPING_TITLE_ID) {
         ui_kbd_open(&lib->kbd, "TITLE ID, LIKE 4D530004", lib->add_key, sizeof lib->add_key, false);
+    } else if (what == UI_LIB_TYPING_NAS_ADDRESS) {
+        if (lib->nas_addr[0] == '\0') {
+            (void)snprintf(lib->nas_addr, sizeof lib->nas_addr, "%s", "192.168.1.");
+        }
+        ui_kbd_open(&lib->kbd, "NAS ADDRESS, LIKE 192.168.1.50", lib->nas_addr,
+                    sizeof lib->nas_addr, false);
+    } else if (what == UI_LIB_TYPING_NAS_USER) {
+        ui_kbd_open(&lib->kbd, "NAS USER NAME (NONE FOR A GUEST)", lib->nas_user,
+                    sizeof lib->nas_user, false);
+    } else if (what == UI_LIB_TYPING_NAS_PASSWORD) {
+        ui_library_forget_nas_password(lib);
+        ui_kbd_open(&lib->kbd, "NAS PASSWORD", lib->nas_password, sizeof lib->nas_password, true);
     } else {
         ui_library_forget_password(lib);
         ui_kbd_open(&lib->kbd, "ARCHIVE.ORG PASSWORD", lib->password, sizeof lib->password, true);
@@ -324,6 +396,19 @@ static ui_lib_action typed(ui_library *lib, ui_kbd_result r, int rows)
             return UI_LIB_LOGIN; /* the caller logs in, then forgets the password */
         }
         ui_library_forget_password(lib);
+    } else if (what == UI_LIB_TYPING_NAS_PASSWORD) {
+        if (r == UI_KBD_DONE) {
+            return UI_LIB_NAS_LOGIN; /* an empty password is a password too */
+        }
+        ui_library_forget_nas_password(lib);
+    } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_NAS_ADDRESS && lib->nas_addr[0] != '\0') {
+        open_kbd(lib, UI_LIB_TYPING_NAS_USER);
+    } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_NAS_USER) {
+        if (lib->nas_user[0] == '\0') {
+            ui_library_forget_nas_password(lib);
+            return UI_LIB_NAS_LOGIN; /* as a guest */
+        }
+        open_kbd(lib, UI_LIB_TYPING_NAS_PASSWORD);
     } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_EMAIL && lib->email[0] != '\0') {
         open_kbd(lib, UI_LIB_TYPING_PASSWORD);
     } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_SOURCE && lib->add_url[0] != '\0') {
@@ -384,6 +469,36 @@ static void source_kind(ui_library *lib, int c)
 /* A press in SETTINGS' list, or in one of its pages. */
 static ui_lib_action settings_input(ui_library *lib, ui_button b, int rows)
 {
+    if (lib->page == UI_LIB_PAGE_NAS) {
+        int cur = lib->nas_list.cur;
+        if (b == UI_BTN_B) {
+            lib->page = UI_LIB_PAGE_NONE;
+        } else if (b == UI_BTN_A && cur == 0) {
+            return UI_LIB_NAS_SCAN;
+        } else if (b == UI_BTN_A && cur == 1) {
+            open_kbd(lib, UI_LIB_TYPING_NAS_ADDRESS);
+        } else if (b == UI_BTN_A && cur - 2 < lib->nas_count) {
+            (void)snprintf(lib->nas_addr, sizeof lib->nas_addr, "%s", lib->nas[cur - 2].address);
+            open_kbd(lib, UI_LIB_TYPING_NAS_USER);
+        } else {
+            (void)ui_list_input(&lib->nas_list, b, rows);
+        }
+        return UI_LIB_NONE;
+    }
+    if (lib->page == UI_LIB_PAGE_BROWSE) {
+        if (b == UI_BTN_B) {
+            return UI_LIB_NAS_UP;
+        }
+        if (b == UI_BTN_A && lib->browse_list.count > 0) {
+            if (ui_library_browse_entry(lib) < 0) {
+                ask(lib, UI_LIB_NAS_USE);
+                return UI_LIB_NONE;
+            }
+            return UI_LIB_NAS_OPEN;
+        }
+        (void)ui_list_input(&lib->browse_list, b, rows);
+        return UI_LIB_NONE;
+    }
     if (lib->page == UI_LIB_PAGE_SOURCES) {
         if (b == UI_BTN_B) {
             lib->page = UI_LIB_PAGE_NONE;
@@ -419,6 +534,8 @@ static ui_lib_action settings_input(ui_library *lib, ui_button b, int rows)
         choose_folder(lib, rows);
     } else if (lib->settings_list.cur == UI_LIB_SETTING_SOURCES) {
         lib->page = UI_LIB_PAGE_SOURCES;
+    } else if (lib->settings_list.cur == UI_LIB_SETTING_NAS) {
+        lib->page = UI_LIB_PAGE_NAS;
     } else {
         lib->page = UI_LIB_PAGE_LOGINS;
     }
@@ -437,6 +554,9 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
         if (what == UI_LIB_SOURCE_KIND) {
             source_kind(lib, c);
             return UI_LIB_NONE;
+        }
+        if (what == UI_LIB_PLAY && lib->section == UI_LIB_GAMES && c == 1) {
+            return UI_LIB_INSTALL; /* INSTALL AGAIN */
         }
         return c == 0 && what != UI_LIB_TELL ? what : UI_LIB_NONE;
     }
@@ -461,14 +581,20 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
         lib->page = UI_LIB_PAGE_NONE;
     } else if (lib->section == UI_LIB_GAMES) {
         if (b == UI_BTN_A && lib->list.count > 0) {
-            ask(lib, UI_LIB_INSTALL);
+            bool installed = lib->items[ui_library_game(lib)].state == UI_LIB_INSTALLED;
+            ask(lib, installed ? UI_LIB_PLAY : UI_LIB_INSTALL);
         } else if (b == UI_BTN_B && lib->query[0] != '\0') {
             lib->query[0] = '\0';
             search(lib, rows);
         } else {
             (void)ui_list_input(&lib->list, b, rows);
         }
-    } else if (lib->section == UI_LIB_INSTALLED_GAMES && b != UI_BTN_A) {
+    } else if (lib->section == UI_LIB_INSTALLED_GAMES && b == UI_BTN_A) {
+        if (lib->installed_count > 0 &&
+            lib->installed[ui_library_installed(lib)].state == UI_LIB_INSTALLED) {
+            ask(lib, UI_LIB_PLAY);
+        }
+    } else if (lib->section == UI_LIB_INSTALLED_GAMES) {
         (void)ui_list_input(&lib->installed_list, b, rows);
     } else if (lib->section == UI_LIB_SETTINGS) {
         return settings_input(lib, b, rows);
@@ -576,7 +702,7 @@ static const char *setting_name(void *ctx, int i)
 {
     (void)ctx;
     static const char *const names[UI_LIB_SETTING_COUNT_] = {"Install location", "Authentication",
-                                                             "Map sources"};
+                                                             "Map sources", "NAS"};
     return names[i];
 }
 
@@ -682,6 +808,86 @@ static void draw_sources(const ui_draw *d, const ui_library *lib)
     }
 }
 
+static const char *nas_name(void *ctx, int i)
+{
+    const ui_library *lib = ctx;
+    return i == 0 ? "Scan the network" : i == 1 ? "Type an address" : lib->nas[i - 2].name;
+}
+
+static const char *browse_name(void *ctx, int i)
+{
+    const ui_library *lib = ctx;
+    if (lib->browse_use) {
+        if (i == 0) {
+            return "Use this folder";
+        }
+        i--;
+    }
+    return lib->browse[i].name;
+}
+
+/* NAS's details: the line in SETTINGS, the NAS page's line, or where browsing is. */
+static void draw_nas(const ui_draw *d, const ui_library *lib)
+{
+    int x = detail.x + PAD + 4;
+    int w = detail.w - 2 * PAD - 4;
+    int y = detail.y + PAD;
+    int bottom = detail.y + detail.h - PAD;
+    int bh = d->line_height(d->ctx, UI_FONT_BOLD);
+    int sh = d->line_height(d->ctx, UI_FONT_SMALL);
+    const char *title = "NAS";
+    const char *note = NULL;
+    const char *text = "Your NAS's shared folders: find it, log in, and choose the folder your "
+                       "games are in. A starts.";
+    const char *more = "Its images, and those in the folders inside it, are listed in GAMES and "
+                       "install from it over the network.";
+    if (lib->page == UI_LIB_PAGE_NAS) {
+        int cur = lib->nas_list.cur;
+        if (cur == 0) {
+            title = "Scan the network";
+            text = "Asks every address of this network for a shared folder service (SMB), a few "
+                   "at a time. It takes about ten seconds.";
+            more = lib->nas_status;
+        } else if (cur == 1) {
+            title = "Type an address";
+            text = "The NAS's IP address, like 192.168.1.50, as its settings or your router "
+                   "show it. Add :port for another port than 445.";
+            more = "Then its user name and password.";
+        } else {
+            const ui_lib_nas *n = &lib->nas[cur - 2];
+            title = n->name;
+            note = n->note;
+            text = "A logs in: its user name, then its password. No user name logs in as a "
+                   "guest.";
+            more = "The password isn't kept: only its NT hash, which the NAS checks logins "
+                   "with, in E:\\Apps\\xcat\\credentials.";
+        }
+    } else if (lib->page == UI_LIB_PAGE_BROWSE) {
+        title = lib->browse_title != NULL ? lib->browse_title : "";
+        text = lib->browse_about;
+        int e = ui_library_browse_entry(lib);
+        more = e < 0 ? "A adds this folder: its images and those of the folders in it."
+               : lib->browse_count > 0 ? "A opens it. B goes up."
+                                       : "B goes up.";
+        if (e >= 0 && e < lib->browse_count && lib->browse[e].note != NULL) {
+            note = lib->browse[e].note;
+        }
+    }
+    y += ui_text_wrap(d, UI_FONT_BOLD, (ui_rect){x, y, w, 2 * bh}, ui_col_accent, title) * bh;
+    if (note != NULL && note[0] != '\0') {
+        (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, note);
+        y += sh;
+    }
+    y += 6;
+    if (text != NULL) {
+        y += ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, 8 * sh}, ui_col_text, text) * sh;
+        y += 6;
+    }
+    if (more != NULL && y < bottom) {
+        (void)ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, bottom - y}, ui_col_dim, more);
+    }
+}
+
 static const char *host_name(void *ctx, int i)
 {
     const ui_library *lib = ctx;
@@ -770,6 +976,15 @@ static void draw_list(const ui_draw *d, ui_library *lib)
             ui_list_draw(d, &lib->host_list, list_in, host_name, lib, lib->in_sections);
         } else if (lib->page == UI_LIB_PAGE_SOURCES) {
             ui_list_draw(d, &lib->source_list, list_in, source_name, lib, lib->in_sections);
+        } else if (lib->page == UI_LIB_PAGE_NAS) {
+            ui_list_draw(d, &lib->nas_list, list_in, nas_name, lib, lib->in_sections);
+        } else if (lib->page == UI_LIB_PAGE_BROWSE) {
+            if (lib->browse_list.count == 0) {
+                (void)ui_text_wrap(d, UI_FONT_BODY, list_in, ui_col_dim,
+                                   "Nothing here this login can open. B goes back.");
+            } else {
+                ui_list_draw(d, &lib->browse_list, list_in, browse_name, lib, lib->in_sections);
+            }
         } else {
             ui_list_draw(d, &lib->settings_list, list_in, setting_name, NULL, lib->in_sections);
         }
@@ -827,6 +1042,15 @@ static const char *hints(const ui_library *lib)
                : h->login != NULL           ? "A remove login  B back  Left sections  Back exit"
                                             : "A how to add one  B back  Left sections  Back exit";
     }
+    if (lib->section == UI_LIB_SETTINGS && lib->page == UI_LIB_PAGE_NAS) {
+        return lib->nas_list.cur == 0   ? "A scan  B back  Left sections  Back exit"
+               : lib->nas_list.cur == 1 ? "A type it  B back  Left sections  Back exit"
+                                        : "A log in  B back  Left sections  Back exit";
+    }
+    if (lib->section == UI_LIB_SETTINGS && lib->page == UI_LIB_PAGE_BROWSE) {
+        return ui_library_browse_entry(lib) < 0 ? "A add this folder  B up  Left sections"
+                                                : "A open  B up  LT RT page  Left sections";
+    }
     if (lib->section == UI_LIB_SETTINGS && lib->page == UI_LIB_PAGE_SOURCES) {
         return ui_library_source(lib) < 0 ? "A add  B back  Left sections  Back exit"
                                           : "A remove  B back  Left sections  Back exit";
@@ -836,7 +1060,12 @@ static const char *hints(const ui_library *lib)
                    ? "A change  Left sections  Y search  Back exit"
                : lib->settings_list.cur == UI_LIB_SETTING_SOURCES
                    ? "A list, add, remove  Left sections  Y search  Back exit"
+               : lib->settings_list.cur == UI_LIB_SETTING_NAS
+                   ? "A find a NAS  Left sections  Y search  Back exit"
                    : "A servers and logins  Left sections  Y search  Back exit";
+    }
+    if (lib->section == UI_LIB_INSTALLED_GAMES) {
+        return "A play  LT RT page  Left sections  Y search  Back exit";
     }
     if (lib->section != UI_LIB_GAMES) {
         return "LT RT page  Left sections  Y search  Back exit";
@@ -871,6 +1100,9 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
         } else if (lib->page == UI_LIB_PAGE_SOURCES ||
                    (on_line && line == UI_LIB_SETTING_SOURCES)) {
             draw_sources(d, lib);
+        } else if (lib->page == UI_LIB_PAGE_NAS || lib->page == UI_LIB_PAGE_BROWSE ||
+                   (on_line && line == UI_LIB_SETTING_NAS)) {
+            draw_nas(d, lib);
         } else {
             draw_logins(d, lib);
         }
@@ -903,6 +1135,12 @@ const char *ui_library_screen(const ui_library *lib)
         return "keyboard-source";
     case UI_LIB_TYPING_TITLE_ID:
         return "keyboard-title-id";
+    case UI_LIB_TYPING_NAS_ADDRESS:
+        return "keyboard-nas-address";
+    case UI_LIB_TYPING_NAS_USER:
+        return "keyboard-nas-user";
+    case UI_LIB_TYPING_NAS_PASSWORD:
+        return "keyboard-nas-password";
     case UI_LIB_TYPING_NONE:
         break;
     }
@@ -919,6 +1157,10 @@ const char *ui_library_screen(const ui_library *lib)
         return "ask-remove";
     case UI_LIB_SOURCE_KIND:
         return "ask-kind";
+    case UI_LIB_PLAY:
+        return "ask-play";
+    case UI_LIB_NAS_USE:
+        return "ask-nas-use";
     case UI_LIB_TELL:
         return "message";
     default:
@@ -931,6 +1173,8 @@ const char *ui_library_screen(const ui_library *lib)
         return lib->page == UI_LIB_PAGE_FOLDERS   ? "folders"
                : lib->page == UI_LIB_PAGE_LOGINS  ? "logins"
                : lib->page == UI_LIB_PAGE_SOURCES ? "sources"
+               : lib->page == UI_LIB_PAGE_NAS     ? "nas"
+               : lib->page == UI_LIB_PAGE_BROWSE  ? "nas-browse"
                                                   : "settings";
     default:
         return "games";

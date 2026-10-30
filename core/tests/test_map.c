@@ -52,7 +52,48 @@ static xc_err fake_fetch(void *ctx, const char *location, bool is_url, size_t ma
     return XC_ERR_IO;
 }
 
-static const xc_map_loader loader = {fake_fetch, NULL};
+/* --- a fake NAS for @smb ----------------------------------------------------------------- */
+
+typedef struct fnas {
+    const char *folder; /* canonical smb:// URL */
+    const char *const *paths;
+    xc_err err;
+} fnas;
+
+static const fnas *nases;
+static size_t nnases;
+static int listings;
+
+static xc_err fake_list(void *ctx, const xc_smb_url *folder, xc_smb_listing *out)
+{
+    (void)ctx;
+    char where[XC_SMB_MAX_URL];
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_smb_url_format(folder, where, sizeof where));
+    listings++;
+    for (size_t i = 0; i < nnases; i++) {
+        if (strcmp(nases[i].folder, where) == 0) {
+            if (nases[i].err != XC_OK) {
+                (void)xc_smb_listing_add(out, "half.iso", 1); /* the map must free it */
+                return nases[i].err;
+            }
+            for (size_t k = 0; nases[i].paths[k] != NULL; k++) {
+                const char *p = nases[i].paths[k];
+                size_t n = strlen(p);
+                if (n > 0 && p[n - 1] == '/') { /* a game folder (smb.md §3.1) */
+                    char game[256];
+                    (void)snprintf(game, sizeof game, "%.*s", (int)(n - 1), p);
+                    TEST_ASSERT_EQUAL_INT(XC_OK, xc_smb_listing_add_game(out, game));
+                } else {
+                    TEST_ASSERT_EQUAL_INT(XC_OK, xc_smb_listing_add(out, p, 1000 + k));
+                }
+            }
+            return XC_OK;
+        }
+    }
+    return XC_ERR_NET_CONNECT;
+}
+
+static const xc_map_loader loader = {fake_fetch, NULL, fake_list};
 
 static void set_files(const ffile *f, size_t n)
 {
@@ -61,10 +102,18 @@ static void set_files(const ffile *f, size_t n)
     fetches = 0;
 }
 
+static void set_nases(const fnas *f, size_t n)
+{
+    nases = f;
+    nnases = n;
+    listings = 0;
+}
+
 void setUp(void)
 {
     memset(&map, 0, sizeof map);
     set_files(NULL, 0);
+    set_nases(NULL, 0);
 }
 
 void tearDown(void)
@@ -214,7 +263,7 @@ static void test_line_errors_keep_loading(void)
     for (size_t line = 4; line <= 8; line++) {
         expect_problem(XC_MAP_ERROR, line, "malformed key");
     }
-    expect_problem(XC_MAP_ERROR, 9, "must start with http:// or https://");
+    expect_problem(XC_MAP_ERROR, 9, "must start with http://, https:// or smb://");
     expect_problem(XC_MAP_ERROR, 10, "user credentials");
     expect_problem(XC_MAP_ERROR, 11, "'#'");
     expect_problem(XC_MAP_ERROR, 12, "invalid URL");
@@ -634,6 +683,115 @@ static void test_archiveorg_limit(void)
     TEST_ASSERT_EQUAL_size_t(1, map.entry_count);
 }
 
+/* §5.4: @smb lists a NAS folder's images (smb.md §3). */
+static void test_smb_folders(void)
+{
+    static const char *const games[] = {"Halo (USA).xiso.iso",   "readme.txt",     "Xbox/Fable.zip",
+                                        "Xbox/100% Done #1.iso", "Xbox/cover.jpg", NULL};
+    static const char *const empty[] = {"notes.txt", NULL};
+    static const fnas fs[] = {
+        {"smb://192.168.1.50/Games", games, XC_OK},
+        {"smb://192.168.1.50/Empty", empty, XC_OK},
+        {"smb://192.168.1.50/Locked", NULL, XC_ERR_SMB_LOGIN},
+    };
+    set_nases(fs, sizeof fs / sizeof fs[0]);
+    TEST_ASSERT_EQUAL_INT(XC_OK,
+                          load(HDR "@smb SMB://192.168.1.50:445/Games/\n"
+                                   "@smb smb://192.168.1.50/Empty\n"
+                                   "@smb smb://192.168.1.50/Locked\n"
+                                   "@smb smb://shaun@192.168.1.50/Games\n"
+                                   "@smb http://192.168.1.50/Games\n"
+                                   "4D530004 = smb://192.168.1.50/Games/Halo (USA).xiso.iso\n"
+                                   "4D530005 = smb://192.168.1.50/Games\n"
+                                   "4D530006 = smb://u@nas/Games/a.iso\n"
+                                   "4D530007 = smb://nas/Games/a.zip/b.iso\n"));
+    TEST_ASSERT_EQUAL_INT(3, listings);
+    TEST_ASSERT_EQUAL_size_t(4, map.entry_count);
+    const xc_map_entry *e = xc_map_find_name(&map, "halo (usa)");
+    TEST_ASSERT_NOT_NULL(e);
+    TEST_ASSERT_EQUAL_STRING("smb://192.168.1.50/Games/Halo (USA).xiso.iso", e->url);
+    TEST_ASSERT_EQUAL_UINT64(1000, e->size);
+    TEST_ASSERT_EQUAL_size_t(2, e->line); /* line 1 is the header */
+    e = xc_map_find_name(&map, "Fable");
+    TEST_ASSERT_NOT_NULL(e);
+    TEST_ASSERT_EQUAL_STRING("smb://192.168.1.50/Games/Xbox/Fable.zip", e->url);
+    e = xc_map_find_name(&map, "100% Done #1");
+    TEST_ASSERT_NOT_NULL(e);
+    TEST_ASSERT_EQUAL_STRING("smb://192.168.1.50/Games/Xbox/100%25 Done %231.iso", e->url);
+    e = xc_map_find(&map, 0x4D530004, NULL);
+    TEST_ASSERT_NOT_NULL(e);
+    TEST_ASSERT_EQUAL_STRING("smb://192.168.1.50/Games/Halo (USA).xiso.iso", e->url);
+    expect_problem(XC_MAP_WARNING, 3, "has no .iso, .xiso or .zip files");
+    expect_problem(XC_MAP_ERROR, 4, "The NAS refused the user name or password");
+    expect_problem(XC_MAP_ERROR, 5, "invalid @smb folder");
+    expect_problem(XC_MAP_ERROR, 6, "invalid @smb folder");
+    expect_problem(XC_MAP_ERROR, 8, "names a share, not an image");
+    expect_problem(XC_MAP_ERROR, 9, "must not contain user credentials");
+    expect_problem(XC_MAP_ERROR, 10, "inside a zip");
+    /* The NAS is one server: its folders and entries. */
+    xc_map_host h[4];
+    TEST_ASSERT_EQUAL_size_t(1, xc_map_hosts(&map, h, 4));
+    TEST_ASSERT_EQUAL_INT(XC_URL_SMB, h[0].scheme);
+    TEST_ASSERT_EQUAL_STRING("192.168.1.50", h[0].host);
+    TEST_ASSERT_EQUAL_UINT16(445, h[0].port);
+    TEST_ASSERT_TRUE(h[0].is_ipv4);
+    TEST_ASSERT_EQUAL_size_t(4, h[0].entries);
+    TEST_ASSERT_EQUAL_size_t(3, h[0].folders);
+    TEST_ASSERT_EQUAL_size_t(3, map.smb_folder_count);
+    TEST_ASSERT_EQUAL_STRING("smb://192.168.1.50/Games", map.smb_folders[0]);
+}
+
+/* smb.md §3.1: game folders are entries named after the folder, whose address ends in '/'. */
+static void test_smb_game_folders(void)
+{
+    static const char *const mixed[] = {"Halo (USA)/", "Xbox/Fable #2/", "Xbox/Jet Set.iso",
+                                        "Bad:Name/", NULL};
+    static const char *const one[] = {"/", NULL};
+    static const char *const top[] = {"/", NULL};
+    static const fnas fs[] = {
+        {"smb://nas/Games", mixed, XC_OK},
+        {"smb://nas/Games/Xbox/Outrun 2006", one, XC_OK},
+        {"smb://nas/Halo2", top, XC_OK},
+    };
+    set_nases(fs, sizeof fs / sizeof fs[0]);
+    TEST_ASSERT_EQUAL_INT(XC_OK, load(HDR "@smb smb://nas/Games\n"
+                                          "@smb smb://nas/Games/Xbox/Outrun 2006\n"
+                                          "@smb smb://nas/Halo2\n"));
+    TEST_ASSERT_EQUAL_size_t(5, map.entry_count);
+    const xc_map_entry *e = xc_map_find_name(&map, "Halo (USA)");
+    TEST_ASSERT_NOT_NULL(e);
+    TEST_ASSERT_EQUAL_STRING("smb://nas/Games/Halo (USA)/", e->url);
+    TEST_ASSERT_EQUAL_UINT64(0, e->size);
+    e = xc_map_find_name(&map, "Fable #2");
+    TEST_ASSERT_NOT_NULL(e);
+    TEST_ASSERT_EQUAL_STRING("smb://nas/Games/Xbox/Fable %232/", e->url);
+    e = xc_map_find_name(&map, "Jet Set");
+    TEST_ASSERT_NOT_NULL(e);
+    TEST_ASSERT_EQUAL_STRING("smb://nas/Games/Xbox/Jet Set.iso", e->url);
+    /* The @smb folder is itself a game: named after its last folder, or its share. */
+    e = xc_map_find_name(&map, "Outrun 2006");
+    TEST_ASSERT_NOT_NULL(e);
+    TEST_ASSERT_EQUAL_STRING("smb://nas/Games/Xbox/Outrun 2006/", e->url);
+    e = xc_map_find_name(&map, "Halo2");
+    TEST_ASSERT_NOT_NULL(e);
+    TEST_ASSERT_EQUAL_STRING("smb://nas/Halo2/", e->url);
+    expect_problem(XC_MAP_WARNING, 2, "skipped 1 game(s)"); /* Bad:Name */
+}
+
+static void test_smb_unavailable(void)
+{
+    static const xc_map_loader no_smb = {fake_fetch, NULL, NULL};
+    xc_map_free(&map);
+    static const char text[] = HDR "@smb smb://nas/Games\n";
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_map_load(text, strlen(text), "map.txt", &no_smb, &map));
+    expect_problem(XC_MAP_ERROR, 2, "@smb isn't available here");
+    /* The folder still counts as a server the map uses (for SETTINGS' logins). */
+    xc_map_host h[2];
+    TEST_ASSERT_EQUAL_size_t(1, xc_map_hosts(&map, h, 2));
+    TEST_ASSERT_EQUAL_STRING("nas", h[0].host);
+    TEST_ASSERT_EQUAL_size_t(1, h[0].folders);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -654,5 +812,8 @@ int main(void)
     RUN_TEST(test_include_failures);
     RUN_TEST(test_file_limit);
     RUN_TEST(test_find);
+    RUN_TEST(test_smb_folders);
+    RUN_TEST(test_smb_game_folders);
+    RUN_TEST(test_smb_unavailable);
     return UNITY_END();
 }

@@ -6,8 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-30
+
+Games from a NAS: install from a shared folder over SMB, found and logged in to on the console, and start installed games from the app (ADR 0018).
+
+### Added
+
+- NAS shared folders over SMB2/3 (ADR 0018, docs/formats/smb.md, docs/nas-setup.md): `smb://host[:port]/share/path` map entries and `@smb <folder>` lines (map.md §4.2, §5.4), which list a folder's `.iso`, `.xiso` and `.zip` images and those one folder down. They install like any image: streamed, resumable, checked, with one reconnect after a dropped connection. libsmb2 (LGPL-2.1) is vendored in `third_party/libsmb2` with a small nxdk port (`xcat/nxdk.patch`, explained in its README) and built into the XBE (`app/smb.mk`) and, on Linux and macOS, `xcat-cli`.
+- Extracted game folders on a NAS (smb.md §3.1–§3.2, docs/formats/folder-image.md): a folder with a `default.xbe` is listed as one game, and installed by turning its listing into a trimmed xiso held in memory, so it gets the image installer's FATX checks, journal, resume and read-back unchanged. NAS clutter (`.DS_Store`, `._*`, `@eaDir`, recycle bins) is left out; anything else the console can't store is refused with its name in the log (`XC_ERR_GAME_FOLDER`).
+- SETTINGS > NAS: scan the console's network for file sharing servers (TCP 445 on its /24, then NetBIOS names; smb.md §5) or type an address, log in on the on-screen keyboard (or as a guest), browse shares and folders, and **Use this folder** writes the login and the `@smb` line and lists the games.
+- SMB logins in the credentials file: `smb_user`, `smb_domain`, `smb_nthash` (credentials.md §4.1). Only the NT hash of the password is kept; the password typed on the console is wiped once it's hashed. HTTP and SMB sections may name the same host (§5).
+- PLAY: A on an installed game starts its `default.xbe` (in GAMES: PLAY, INSTALL AGAIN or CANCEL).
+- `xcat-cli smb-scan`, `smb-shares`, `smb-ls [--tree]` and `smb-hash`; `xcat-cli map` lists `@smb` folders and `install` takes `smb://` images and game folders (a URL ending in `/`).
+- New core modules `smb` (addresses, image names, NT hash with its own MD4, listings), `netbios` (node status) and `folder_image`, each tested and fuzzed; the error codes `XC_ERR_SMB_URL`, `_LOGIN`, `_SHARE`, `_DENIED`, `_NOT_FOUND`, `XC_ERR_SMB` and `XC_ERR_GAME_FOLDER`.
+- The release zip carries libsmb2's licence and where its source is (`licenses\libsmb2.txt`, `licenses\libsmb2-source.txt`).
+
 ### Changed
 
+- lwIP on the console: 32 sockets (`MEMP_NUM_NETCONN`) and a 64-entry ARP table, for the NAS scan's 16 connections at a time. Rebuild the Docker image after pulling.
 - README: the status is now beta (0.9.0), "What it will do" is "What it does", and a new "Installing" section explains how to put a release on the console.
 
 ## [0.9.0] - 2026-10-28

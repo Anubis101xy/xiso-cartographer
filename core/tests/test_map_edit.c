@@ -84,6 +84,10 @@ static void new_bad(xc_map_line_kind kind, const char *key, const char *url, con
 static void test_new_line(void)
 {
     new_ok(XC_MAP_LINE_ARCHIVEORG, NULL, "my_item-2.0", "@archiveorg my_item-2.0");
+    new_ok(XC_MAP_LINE_SMB, NULL, "SMB://192.168.1.50:445/Games/Xbox%20OG/",
+           "@smb smb://192.168.1.50/Games/Xbox OG");
+    new_bad(XC_MAP_LINE_SMB, NULL, "smb://shaun@nas/Games", "smb://<NAS>/<share>");
+    new_bad(XC_MAP_LINE_SMB, NULL, "http://nas/Games", "smb://<NAS>/<share>");
     new_ok(XC_MAP_LINE_INCLUDE, NULL, "HTTP://192.168.1.20:8080/map.txt",
            "@include HTTP://192.168.1.20:8080/map.txt");
     new_ok(XC_MAP_LINE_ENTRY, "4d530004", "http://192.168.1.20/Halo (Europe).xiso.iso",

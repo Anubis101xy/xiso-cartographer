@@ -12,6 +12,7 @@ add_library(xcat
   src/fatx.c
   src/hash.c
   src/http.c
+  src/folder_image.c
   src/http_client.c
   src/install.c
   src/installed.c
@@ -19,8 +20,11 @@ add_library(xcat
   src/json.c
   src/login.c
   src/settings.c
+  src/smb.c
   src/map.c
   src/map_edit.c
+  src/md4.c
+  src/netbios.c
   src/seq.c
   src/source.c
   src/sntp.c

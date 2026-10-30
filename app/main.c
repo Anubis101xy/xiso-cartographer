@@ -32,6 +32,7 @@
 #include <SDL.h>
 #include <hal/debug.h>
 #include <hal/video.h>
+#include <hal/xbox.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +57,9 @@
 #include "xcat/map_edit.h"
 #include "xcat/nxdk.h"
 #include "xcat/settings.h"
+#include "xcat/smb.h"
+#include "xcat/smb_client.h"
+#include "xcat/smb_scan.h"
 #include "xcat/ui_script.h"
 #include "xcat/version.h"
 #include "xcat/zip.h"
@@ -616,6 +620,34 @@ static xc_err map_fetch(void *ctx, const char *location, bool is_url, size_t max
     return XC_OK;
 }
 
+/* xc_map_smb_list_fn: an @smb folder's images, with the login the credentials file gives its
+   NAS (smb.md §3, §4). */
+static xc_err map_list_smb(void *ctx, const xc_smb_url *folder, xc_smb_listing *listing)
+{
+    (void)ctx;
+    if (!network()) {
+        return XC_ERR_NET_CONNECT;
+    }
+    say("Listing a folder on the NAS...\n");
+    xc_smb_conn *c = NULL;
+    char detail[XC_SMB_DETAIL_MAX];
+    xc_err err = xc_smb_connect_url(folder, have_creds ? &creds : NULL, &c, detail, sizeof detail);
+    if (err == XC_OK) {
+        err = xc_smb_list_tree(c, folder->path, listing);
+        if (err != XC_OK) {
+            snprintf(detail, sizeof detail, "%s", xc_smb_detail(c));
+        }
+        xc_smb_disconnect(c);
+    }
+    if (err != XC_OK) {
+        out("  NAS %s, share %s: %s (%s)\n", folder->host, folder->share, xc_err_str(err), detail);
+    } else {
+        out("  NAS %s, share %s: %u image(s)\n", folder->host, folder->share,
+            (unsigned)listing->count);
+    }
+    return err;
+}
+
 static bool load_map(xc_map *map)
 {
     memset(map, 0, sizeof *map);
@@ -629,7 +661,7 @@ static bool load_map(xc_map *map)
         out("%s: %s\n", MAP_FILE, err == XC_ERR_LIMIT ? "larger than 1 MiB" : xc_err_str(err));
         return false;
     }
-    xc_map_loader loader = {map_fetch, NULL};
+    xc_map_loader loader = {map_fetch, NULL, map_list_smb};
     err = xc_map_load(data, len, MAP_FILE, &loader, map);
     free(data);
     for (size_t i = 0; i < map->problem_count; i++) {
@@ -903,6 +935,29 @@ static int list_hosts(void)
             archive_maps += h->maps;
             continue;
         }
+        if (h->scheme == XC_URL_SMB) {
+            char port[8] = "";
+            if (h->port != XC_SMB_PORT) {
+                snprintf(port, sizeof port, ":%u", (unsigned)h->port);
+            }
+            snprintf(host_names[k], sizeof host_names[k], "NAS %s%s", h->host, port);
+            const xc_cred_section *nas_sec =
+                have_creds ? xc_cred_for_smb(&creds, h->host, h->port) : NULL;
+            if (nas_sec != NULL) {
+                snprintf(host_logins[k], sizeof host_logins[k], "%s", nas_sec->name);
+            }
+            snprintf(host_notes[k], sizeof host_notes[k], "%u game%s, %u folder%s",
+                     (unsigned)h->entries, h->entries == 1 ? "" : "s", (unsigned)h->folders,
+                     h->folders == 1 ? "" : "s");
+            hosts[k] = (ui_lib_host){
+                host_names[k], false, nas_sec != NULL ? host_logins[k] : NULL, host_notes[k],
+                nas_sec != NULL ? "Its NT hash is kept, never the password. SETTINGS > "
+                                  "NAS logs in again."
+                                : "No login: it's asked as a guest. SETTINGS > NAS logs "
+                                  "in with a user name."};
+            k++;
+            continue;
+        }
         bool https = h->scheme == XC_URL_HTTPS;
         bool plain_port = h->port == (https ? 443 : 80);
         char port[8] = "";
@@ -1132,6 +1187,9 @@ static int hexval(char c)
 static void title_from(const char *name, char *out_title, size_t size)
 {
     const char *end = name + strcspn(name, "?#");
+    while (end > name && end[-1] == '/') {
+        end--; /* a game folder's address (smb.md §3.1): named after the folder */
+    }
     const char *p = end;
     while (p > name && p[-1] != '/' && p[-1] != '\\') {
         p--;
@@ -1377,8 +1435,10 @@ static void refused(void)
 /* Installs one image; true if it ended installed and verified. `listing` is the map entry
    when an archive.org listing describes the file (archiveorg.md §8), else NULL. `release`
    is the catalog's release for it, or XC_CATALOG_NONE. */
+/* game_folder: src is a game folder's image (folder-image.md), with no image hashes. */
 static bool install(const xc_source *src, const char *name, const char *etag,
-                    const char *last_modified, const xc_map_entry *listing, size_t release)
+                    const char *last_modified, const xc_map_entry *listing, size_t release,
+                    bool game_folder)
 {
     char title[128];
     title_from(name, title, sizeof title);
@@ -1408,12 +1468,14 @@ static bool install(const xc_source *src, const char *name, const char *etag,
     req.progress = on_progress;
     req.progress_ctx = &u;
     req.zip = xc_zip_is_zip_name(name);
-    if (listing != NULL && listing->name != NULL) {
+    req.no_hash = game_folder;
+    if (listing != NULL && listing->name != NULL && !game_folder) {
         req.expect_size = listing->size;
         /* A zip's hashes are the zip's, not the image's: its member's CRC-32 covers that. */
         req.expect_md5 = listing->has_md5 && !req.zip ? listing->md5 : NULL;
         req.expect_sha1 = listing->has_sha1 && !req.zip ? listing->sha1 : NULL;
-        out("  archive.org says: %llu bytes%s\n", (unsigned long long)listing->size,
+        out("  %s says: %llu bytes%s\n", xc_smb_is_url(name) ? "the NAS's folder" : "archive.org",
+            (unsigned long long)listing->size,
             req.expect_md5 != NULL || req.expect_sha1 != NULL ? ", MD5/SHA-1 compared" : "");
     }
     xc_err err = xc_install(&req, &result);
@@ -1507,9 +1569,78 @@ static bool install(const xc_source *src, const char *name, const char *etag,
     return false;
 }
 
+/* An image on a NAS's shared folder (smb.md, ADR 0018), with the login the credentials file
+   gives the NAS. */
+static bool install_smb(const xc_map_entry *e, size_t release)
+{
+    const char *url = e->url;
+    if (!network()) {
+        fail(XC_ERR_NET_CONNECT);
+        why[0] = '\0';
+        explain("No network: check the cable and the dashboard's network settings.");
+        return false;
+    }
+    static xc_smb_url u;
+    xc_err err = xc_smb_url_parse(url, strlen(url), &u);
+    if (err != XC_OK) {
+        fail(err);
+        return false;
+    }
+    size_t url_len = strlen(url);
+    bool folder = url_len > 0 && url[url_len - 1U] == '/'; /* a game folder (smb.md §3.1) */
+    say("Connecting to the NAS...\n");
+    xc_smb_conn *c = NULL;
+    char why_smb[XC_SMB_DETAIL_MAX];
+    err = xc_smb_connect_url(&u, have_creds ? &creds : NULL, &c, why_smb, sizeof why_smb);
+    xc_smb_file *f = NULL;
+    xc_smb_game *g = NULL;
+    xc_source src;
+    if (err == XC_OK && folder) {
+        say("Listing the game folder on the NAS...\n");
+        err = xc_smb_open_game(c, u.path, &g, &src, why_smb, sizeof why_smb);
+    } else if (err == XC_OK) {
+        say("Opening the image on the NAS...\n");
+        err = xc_smb_open(c, u.path, &f, &src);
+        if (err != XC_OK) {
+            snprintf(why_smb, sizeof why_smb, "%s", xc_smb_detail(c));
+        }
+    }
+    if (err != XC_OK) {
+        fail(err);
+        if (why_smb[0] != '\0') {
+            detail(err == XC_ERR_GAME_FOLDER ? "In the game folder: %s" : "The NAS said: %s",
+                   why_smb);
+        }
+        xc_smb_disconnect(c);
+        return false;
+    }
+    if (g != NULL) {
+        out("  game folder: %u files, %llu bytes\n", (unsigned)xc_smb_game_files(g),
+            (unsigned long long)xc_smb_game_size(g));
+    }
+    bool ok = install(&src, url, g != NULL ? xc_smb_game_validator(g) : NULL, NULL, e, release,
+                      g != NULL);
+    out("  SMB: %llu bytes read, %u reconnection(s)\n",
+        (unsigned long long)(g != NULL ? xc_smb_game_bytes(g) : xc_smb_file_bytes(f)),
+        g != NULL ? xc_smb_game_reconnects(g) : xc_smb_file_reconnects(f));
+    if (!ok && g != NULL && xc_smb_game_detail(g)[0] != '\0') {
+        out("  the NAS, reading %s\n", xc_smb_game_detail(g));
+    } else if (!ok && xc_smb_detail(c)[0] != '\0') {
+        out("  the NAS said: %s\n", xc_smb_detail(c));
+    }
+    xc_smb_close_game(g);
+    xc_smb_close(f);
+    xc_smb_disconnect(c);
+    return ok;
+}
+
 static bool install_url(const xc_map_entry *e, size_t release)
 {
     const char *url = e->url;
+    if (xc_smb_is_url(url)) {
+        out("\n%s\n", url);
+        return install_smb(e, release);
+    }
     out("\n%s\n", url);
     if (!network()) {
         fail(XC_ERR_NET_CONNECT);
@@ -1543,7 +1674,7 @@ static bool install_url(const xc_map_entry *e, size_t release)
         return false;
     }
     bool ok = install(&src, url, res.etag[0] != '\0' ? res.etag : NULL,
-                      res.last_modified[0] != '\0' ? res.last_modified : NULL, e, release);
+                      res.last_modified[0] != '\0' ? res.last_modified : NULL, e, release, false);
     if (is_https(url) && tls != NULL) {
         /* After redirects: the server the data came from (ADR 0005 asks to watch the suite). */
         xc_tls_info info;
@@ -1568,7 +1699,7 @@ static bool install_file(const char *path, size_t release)
         detail("Can't read %s", path);
         return false;
     }
-    bool ok = install(&src, path, NULL, NULL, NULL, release);
+    bool ok = install(&src, path, NULL, NULL, NULL, release, false);
     xc_nx_file_close(&f);
     return ok;
 }
@@ -1621,15 +1752,16 @@ static int list_local(char names[MAX_LOCAL][XC_NX_PATH_MAX])
 #define LABEL_MAX 128
 
 typedef struct game {
-    char name[LABEL_MAX];      /* the catalog's title, else the file or listing name */
-    char key[40];              /* the title ID and variant, from the map or the catalog */
-    char facts[96];            /* year, region, size */
-    char about[512];           /* who made it, the release, where it comes from */
-    char note[400];            /* what the last install attempt in this run came to */
-    uint64_t size;             /* from the listing; 0 if unknown */
-    const xc_map_entry *entry; /* a map entry, or */
-    const char *path;          /* a file in E:\xcat\isos */
-    size_t release;            /* the catalog's release, or XC_CATALOG_NONE */
+    char name[LABEL_MAX];                /* the catalog's title, else the file or listing name */
+    char key[40];                        /* the title ID and variant, from the map or the catalog */
+    char facts[96];                      /* year, region, size */
+    char about[512];                     /* who made it, the release, where it comes from */
+    char note[400];                      /* what the last install attempt in this run came to */
+    char installed[XC_INSTALL_MAX_PATH]; /* its folder, if it's installed; "" if not */
+    uint64_t size;                       /* from the listing; 0 if unknown */
+    const xc_map_entry *entry;           /* a map entry, or */
+    const char *path;                    /* a file in E:\xcat\isos */
+    size_t release;                      /* the catalog's release, or XC_CATALOG_NONE */
 } game;
 
 /* The catalog's release for a map entry or local file (map.md §4.1, §5.2): by title ID and
@@ -1663,6 +1795,15 @@ static void source_text(const game *g, char *out_text, size_t size)
     }
     const char *host = strstr(g->entry->url, "://");
     host = host != NULL ? host + 3 : g->entry->url;
+    if (xc_smb_is_url(g->entry->url)) {
+        const char *share = host + strcspn(host, "/");
+        share += *share == '/' ? 1 : 0;
+        size_t n = strlen(host);
+        (void)snprintf(out_text, size, "From the NAS %.*s, shared folder %.*s%s.",
+                       (int)strcspn(host, "/:"), host, (int)strcspn(share, "/"), share,
+                       n > 0 && host[n - 1U] == '/' ? ", an extracted game folder" : "");
+        return;
+    }
     (void)snprintf(out_text, size, "From %.*s%s.", (int)strcspn(host, "/:?#"), host,
                    g->entry->name != NULL ? ", an archive.org listing" : "");
 }
@@ -1890,6 +2031,10 @@ static void mark_games(game *games, ui_lib_item *items, int count)
         snprintf(games[i].note, sizeof games[i].note, "%s%s\\%s",
                  done != NULL ? "In " : "Started in an earlier visit, in ", settings.install_dir,
                  f->folder);
+        if (done != NULL) {
+            snprintf(games[i].installed, sizeof games[i].installed, "%s\\%s", settings.install_dir,
+                     f->folder);
+        }
         items[i].state = done != NULL ? UI_LIB_INSTALLED : UI_LIB_UNFINISHED;
         items[i].note = games[i].note;
         installed += done != NULL;
@@ -1912,6 +2057,9 @@ static bool run_install(game *g, ui_lib_item *item)
                                    : install_file(g->path, g->release);
         install_done();
         out("%s\n", ok ? "Installed and verified." : "Not installed.");
+        if (ok) {
+            snprintf(g->installed, sizeof g->installed, "%s", result.folder);
+        }
         snprintf(g->note, sizeof g->note, "%s", why);
         item->state = ok                            ? UI_LIB_INSTALLED
                       : why_err == XC_ERR_CANCELLED ? UI_LIB_STOPPED
@@ -2006,7 +2154,11 @@ static void describe_source(const xc_map_line *l, int i)
     unsigned line = (unsigned)l->line;
     source_line_no[i] = l->line;
     const char *kind = "Directive";
-    if (l->kind == XC_MAP_LINE_ARCHIVEORG) {
+    if (l->kind == XC_MAP_LINE_SMB) {
+        kind = "NAS folder";
+        snprintf(source_names[i], sizeof source_names[i], "NAS: %.*s", al > 6 ? al - 6 : al,
+                 al > 6 ? l->arg + 6 : l->arg);
+    } else if (l->kind == XC_MAP_LINE_ARCHIVEORG) {
         kind = "archive.org item";
         snprintf(source_names[i], sizeof source_names[i], "archive.org: %.*s", al, l->arg);
     } else if (l->kind == XC_MAP_LINE_INCLUDE) {
@@ -2278,6 +2430,7 @@ static void change_folder(ui_library *lib, game *games, ui_lib_item *items, int 
             items[i].state = UI_LIB_NOT_TRIED;
             items[i].note = NULL;
         }
+        games[i].installed[0] = '\0';
     }
     scan_games();
     mark_games(games, items, count);
@@ -2287,6 +2440,508 @@ static void change_folder(ui_library *lib, game *games, ui_lib_item *items, int 
              "Games install to %s from now on. Games installed in another folder stay there.",
              settings.install_dir);
     ui_library_tell(lib, "INSTALL LOCATION", msg);
+}
+
+/* --- playing an installed game ---------------------------------------------------------- */
+
+/* UI_LIB_PLAY: starts default.xbe in the game's folder. Returns only if it can't. */
+static void play(ui_library *lib, const game *games)
+{
+    char folder[XC_INSTALL_MAX_PATH] = "";
+    if (lib->section == UI_LIB_GAMES && ui_library_game(lib) >= 0) {
+        snprintf(folder, sizeof folder, "%s", games[ui_library_game(lib)].installed);
+    } else if (lib->section == UI_LIB_INSTALLED_GAMES && found_count > 0) {
+        snprintf(folder, sizeof folder, "%s\\%s", settings.install_dir,
+                 founds[ui_library_installed(lib)].folder);
+    }
+    char xbe[XC_INSTALL_MAX_PATH + 16];
+    snprintf(xbe, sizeof xbe, "%s\\default.xbe", folder);
+    if (folder[0] == '\0' || !xc_nx_exists(xbe)) {
+        char msg[sizeof xbe + 64];
+        snprintf(msg, sizeof msg,
+                 "There's no default.xbe in %s, so the game can't start from here.",
+                 folder[0] != '\0' ? folder : "its folder");
+        ui_library_tell(lib, "CAN'T START", msg);
+        return;
+    }
+    out("\nStarting %s\n", xbe);
+    starting = false;
+    close_log();
+    ui_sdl_close();
+    XLaunchXBE(xbe);
+    /* XLaunchXBE only returns if the path couldn't be used: back to the dashboard. */
+    HalReturnToFirmware(HalQuickRebootRoutine);
+}
+
+/* --- SETTINGS > NAS: finding a NAS, logging in, choosing a shared folder (smb.md) ---------- */
+
+#define MAX_BROWSE 256 /* shares or folders listed; more are left out */
+
+static struct {
+    char host[XC_SMB_MAX_HOST + 1];
+    uint16_t port;
+    char label[48]; /* its NetBIOS name if the scan found one, else its address */
+    char user[XC_SMB_MAX_USER + 1];
+    char domain[XC_SMB_MAX_DOMAIN + 1];
+    char nthash[XC_SMB_NTHASH_HEX + 1];
+    bool guest;
+    xc_smb_conn *conn;                /* to `share` while browsing it */
+    char share[XC_SMB_MAX_SHARE + 1]; /* "" while listing the shares */
+    char path[XC_SMB_MAX_PATH + 1];   /* inside the share, '/'-separated */
+} nas;
+
+static xc_smb_found nas_found[XC_SMB_SCAN_MAX];
+static char nas_names[XC_SMB_SCAN_MAX][40];
+static char nas_addrs[XC_SMB_SCAN_MAX][24];
+static char nas_notes[XC_SMB_SCAN_MAX][64];
+static ui_lib_nas nas_list[XC_SMB_SCAN_MAX];
+static char nas_status[200];
+static char browse_names[MAX_BROWSE][XC_SMB_MAX_NAME + 1];
+static char browse_notes[MAX_BROWSE][48];
+static ui_lib_entry browse_entries[MAX_BROWSE];
+static int browse_n;
+static int browse_images;
+static char browse_title[XC_SMB_MAX_PATH + 160];
+static char browse_about[240];
+
+/* Shows `line` in the footer at once: the scan and logins take a moment. */
+static void nas_busy(ui_library *lib, const char *line)
+{
+    if (exit_combo()) {
+        to_dashboard();
+    }
+    ui_sdl_begin(ui_col_bg);
+    ui_library_draw(&screen, lib, pan_now, line);
+    ui_sdl_present();
+}
+
+static bool scan_progress(void *ctx, unsigned done, unsigned total)
+{
+    char line[96];
+    snprintf(line, sizeof line, "Asking the network for a NAS: %u of %u addresses...", done, total);
+    nas_busy(ctx, line);
+    return true;
+}
+
+/* UI_LIB_NAS_SCAN */
+static void nas_scan(ui_library *lib)
+{
+    nas_busy(lib, "Starting the network...");
+    if (!network()) {
+        ui_library_tell(lib, "NO NETWORK",
+                        "The network didn't start: check the cable and the dashboard's network "
+                        "settings.");
+        return;
+    }
+    xc_smb_scan_opts o;
+    memset(&o, 0, sizeof o);
+    if (!xc_nx_net_ipv4(o.ip, o.mask)) {
+        ui_library_tell(lib, "NO ADDRESS", "The console has no network address yet.");
+        return;
+    }
+    o.batch = 16;
+    o.wait_ms = 600;
+    o.progress = scan_progress;
+    o.ctx = lib;
+    size_t n = 0;
+    out("NAS scan from %u.%u.%u.%u/%u.%u.%u.%u\n", o.ip[0], o.ip[1], o.ip[2], o.ip[3], o.mask[0],
+        o.mask[1], o.mask[2], o.mask[3]);
+    xc_err err = xc_smb_scan(&o, nas_found, XC_SMB_SCAN_MAX, &n);
+    for (size_t i = 0; i < n; i++) {
+        const xc_smb_found *f = &nas_found[i];
+        snprintf(nas_addrs[i], sizeof nas_addrs[i], "%u.%u.%u.%u", f->ip[0], f->ip[1], f->ip[2],
+                 f->ip[3]);
+        snprintf(nas_names[i], sizeof nas_names[i], "%s",
+                 f->name[0] != '\0' ? f->name : nas_addrs[i]);
+        snprintf(nas_notes[i], sizeof nas_notes[i], "%s%s%s", nas_addrs[i],
+                 f->group[0] != '\0' ? ", workgroup " : "", f->group);
+        nas_list[i] = (ui_lib_nas){nas_names[i], nas_addrs[i], nas_notes[i]};
+        out("  found %s (%s)\n", nas_names[i], nas_notes[i]);
+    }
+    if (err != XC_OK) {
+        snprintf(nas_status, sizeof nas_status, "The scan stopped: %s.", xc_err_str(err));
+    } else if (n == 0) {
+        snprintf(nas_status, sizeof nas_status,
+                 "No NAS answered on %u.%u.%u.x. Check that SMB is on in the NAS's settings, or "
+                 "type its address.",
+                 o.ip[0], o.ip[1], o.ip[2]);
+    } else {
+        snprintf(nas_status, sizeof nas_status, "%u found on %u.%u.%u.x. Pick yours below.",
+                 (unsigned)n, o.ip[0], o.ip[1], o.ip[2]);
+    }
+    ui_library_set_nas(lib, nas_list, (int)n, nas_status);
+    if (n == 0 || err != XC_OK) {
+        ui_library_tell(lib, "NAS SCAN", nas_status);
+    }
+}
+
+static xc_smb_login nas_login_now(void)
+{
+    xc_smb_login l = {NULL, NULL, NULL};
+    if (!nas.guest) {
+        l.user = nas.user;
+        l.domain = nas.domain[0] != '\0' ? nas.domain : NULL;
+        l.nthash = nas.nthash;
+    }
+    return l;
+}
+
+static void nas_close(void)
+{
+    xc_smb_disconnect(nas.conn);
+    nas.conn = NULL;
+}
+
+/* Why a NAS request failed, on a message, and in the log with the server's own words. */
+static void nas_failed(ui_library *lib, const char *title, xc_err err, const char *detail)
+{
+    char msg[sizeof lib->message];
+    snprintf(msg, sizeof msg, "%s. %s", xc_err_str(err), xc_err_action(err));
+    out("NAS %s: %s (%s)\n", nas.host, xc_err_str(err), detail != NULL ? detail : "");
+    ui_library_tell(lib, title, msg);
+}
+
+static bool add_share(void *ctx, const char *name, const char *remark)
+{
+    (void)ctx;
+    if (browse_n == MAX_BROWSE) {
+        return false;
+    }
+    snprintf(browse_names[browse_n], sizeof browse_names[browse_n], "%s", name);
+    snprintf(browse_notes[browse_n], sizeof browse_notes[browse_n], "%s", remark);
+    browse_entries[browse_n] = (ui_lib_entry){browse_names[browse_n], browse_notes[browse_n]};
+    browse_n++;
+    return true;
+}
+
+static int by_entry_name(const void *a, const void *b)
+{
+    const char *x = ((const ui_lib_entry *)a)->name;
+    const char *y = ((const ui_lib_entry *)b)->name;
+    for (;; x++, y++) {
+        int cx = *x >= 'A' && *x <= 'Z' ? *x - 'A' + 'a' : (unsigned char)*x;
+        int cy = *y >= 'A' && *y <= 'Z' ? *y - 'A' + 'a' : (unsigned char)*y;
+        if (cx != cy || cx == 0) {
+            return cx - cy;
+        }
+    }
+}
+
+/* The NAS's shares, as the first browse level. */
+static void nas_list_shares(ui_library *lib)
+{
+    nas_close();
+    nas.share[0] = '\0';
+    nas.path[0] = '\0';
+    char line[XC_SMB_MAX_HOST + 48];
+    snprintf(line, sizeof line, "Logging in to %s...", nas.label);
+    nas_busy(lib, line);
+    browse_n = 0;
+    xc_smb_login login = nas_login_now();
+    char detail[XC_SMB_DETAIL_MAX];
+    xc_err err = xc_smb_shares(nas.host, nas.port, &login, add_share, NULL, detail, sizeof detail);
+    if (err != XC_OK) {
+        nas_failed(lib, "NOT LOGGED IN", err, detail);
+        ui_library_nas_page(lib);
+        return;
+    }
+    qsort(browse_entries, (size_t)browse_n, sizeof *browse_entries, by_entry_name);
+    out("NAS %s: logged in as %s, %d shared folder(s)\n", nas.host,
+        nas.guest ? "a guest" : nas.user, browse_n);
+    snprintf(browse_title, sizeof browse_title, "%s", nas.label);
+    snprintf(browse_about, sizeof browse_about,
+             browse_n == 0 ? "No shared folders this login can see."
+                           : "%d shared folder%s. A "
+                             "opens one.",
+             browse_n, browse_n == 1 ? "" : "s");
+    ui_library_browse(lib, browse_title, browse_about, browse_entries, browse_n, false);
+}
+
+static bool add_folder(void *ctx, const char *name, bool is_dir, uint64_t size)
+{
+    (void)ctx;
+    (void)size;
+    if (!is_dir) {
+        char image[XC_SMB_MAX_NAME + 1];
+        browse_images += xc_smb_image_name(name, image, sizeof image, NULL) ? 1 : 0;
+        return true;
+    }
+    if (browse_n == MAX_BROWSE || xc_smb_skipped_folder(name) ||
+        !xc_smb_valid_name(name, strlen(name))) {
+        return true;
+    }
+    snprintf(browse_names[browse_n], sizeof browse_names[browse_n], "%s", name);
+    browse_entries[browse_n] = (ui_lib_entry){browse_names[browse_n], NULL};
+    browse_n++;
+    return true;
+}
+
+/* The folders in nas.share/nas.path, after "Use this folder". False if it can't be listed. */
+static bool nas_list_folder(ui_library *lib)
+{
+    nas_busy(lib, "Listing the folder...");
+    browse_n = 0;
+    browse_images = 0;
+    xc_err err = xc_smb_list(nas.conn, nas.path, add_folder, NULL);
+    if (err != XC_OK) {
+        nas_failed(lib, "CAN'T OPEN", err, xc_smb_detail(nas.conn));
+        return false;
+    }
+    qsort(browse_entries, (size_t)browse_n, sizeof *browse_entries, by_entry_name);
+    int n = snprintf(browse_title, sizeof browse_title, "%s > %s", nas.label, nas.share);
+    for (const char *p = nas.path; *p != '\0' && n > 0 && (size_t)n < sizeof browse_title;) {
+        size_t len = strcspn(p, "/");
+        n += snprintf(browse_title + n, sizeof browse_title - (size_t)n, " > %.*s", (int)len, p);
+        p += len + (p[len] == '/' ? 1U : 0U);
+    }
+    if (browse_images > 0) {
+        snprintf(browse_about, sizeof browse_about,
+                 "%d image%s here (.iso, .xiso, .zip). Use this folder adds them, and those in "
+                 "the folders inside it.",
+                 browse_images, browse_images == 1 ? "" : "s");
+    } else {
+        snprintf(browse_about, sizeof browse_about, "%s",
+                 "No images right here. Use this folder still finds those in the folders inside "
+                 "it, one level down.");
+    }
+    ui_library_browse(lib, browse_title, browse_about, browse_entries, browse_n, true);
+    return true;
+}
+
+/* UI_LIB_NAS_LOGIN: what was typed (or picked) becomes the NAS and its login, kept in memory
+   as an NT hash until a folder is added; the password is wiped. */
+static void nas_login(ui_library *lib)
+{
+    static xc_smb_url u;
+    char probe[UI_LIB_NAS_ADDR_MAX + 16];
+    snprintf(probe, sizeof probe, "smb://%s/IPC", lib->nas_addr);
+    bool addr_ok =
+        strchr(lib->nas_addr, '/') == NULL && xc_smb_url_parse(probe, strlen(probe), &u) == XC_OK;
+    nas.guest = lib->nas_user[0] == '\0';
+    nas.domain[0] = '\0';
+    nas.user[0] = '\0';
+    xc_err err = XC_OK;
+    if (!nas.guest) {
+        /* DOMAIN\user, as Windows writes it, or just the user. */
+        const char *slash = strchr(lib->nas_user, '\\');
+        if (slash != NULL) {
+            snprintf(nas.domain, sizeof nas.domain, "%.*s", (int)(slash - lib->nas_user),
+                     lib->nas_user);
+            snprintf(nas.user, sizeof nas.user, "%s", slash + 1);
+        } else {
+            snprintf(nas.user, sizeof nas.user, "%s", lib->nas_user);
+        }
+        err = xc_smb_nthash(lib->nas_password, nas.nthash);
+    }
+    ui_library_forget_nas_password(lib);
+    if (!addr_ok) {
+        ui_library_tell(lib, "NOT LOGGED IN",
+                        "That isn't a NAS address: type its IP address, like 192.168.1.50, or "
+                        "its name, with :port only if it isn't 445.");
+        return;
+    }
+    if (err != XC_OK || (!nas.guest && nas.user[0] == '\0')) {
+        ui_library_tell(lib, "NOT LOGGED IN",
+                        "The user name or password can't be used (a password is at most 256 "
+                        "characters).");
+        return;
+    }
+    if (!network()) {
+        ui_library_tell(lib, "NO NETWORK",
+                        "The network didn't start: check the cable and the dashboard's network "
+                        "settings.");
+        return;
+    }
+    snprintf(nas.host, sizeof nas.host, "%s", u.host);
+    nas.port = u.port;
+    snprintf(nas.label, sizeof nas.label, "%s", u.host);
+    for (int i = 0; i < lib->nas_count; i++) {
+        if (strcmp(lib->nas[i].address, lib->nas_addr) == 0) {
+            snprintf(nas.label, sizeof nas.label, "%s", lib->nas[i].name);
+        }
+    }
+    nas_list_shares(lib);
+}
+
+/* UI_LIB_NAS_OPEN: a share, or a folder in it. */
+static void nas_open(ui_library *lib)
+{
+    int e = ui_library_browse_entry(lib);
+    if (e < 0 || e >= browse_n) {
+        return;
+    }
+    char name[XC_SMB_MAX_NAME + 1];
+    snprintf(name, sizeof name, "%s", browse_names[e]);
+    if (nas.share[0] == '\0') {
+        char line[XC_SMB_MAX_SHARE + 32];
+        snprintf(line, sizeof line, "Opening %s...", name);
+        nas_busy(lib, line);
+        xc_smb_login login = nas_login_now();
+        char detail[XC_SMB_DETAIL_MAX];
+        xc_err err =
+            xc_smb_connect(nas.host, nas.port, name, &login, &nas.conn, detail, sizeof detail);
+        if (err != XC_OK) {
+            nas_failed(lib, "CAN'T OPEN", err, detail);
+            return;
+        }
+        snprintf(nas.share, sizeof nas.share, "%s", name);
+        nas.path[0] = '\0';
+        if (!nas_list_folder(lib)) {
+            nas_list_shares(lib);
+        }
+        return;
+    }
+    size_t len = strlen(nas.path);
+    if (len + 1 + strlen(name) > XC_SMB_MAX_PATH) {
+        ui_library_tell(lib, "CAN'T OPEN", "The folder's path is too long for an smb:// address.");
+        return;
+    }
+    char was[XC_SMB_MAX_PATH + 1];
+    snprintf(was, sizeof was, "%s", nas.path);
+    snprintf(nas.path + len, sizeof nas.path - len, "%s%s", len > 0 ? "/" : "", name);
+    if (!nas_list_folder(lib)) {
+        snprintf(nas.path, sizeof nas.path, "%s", was);
+        (void)nas_list_folder(lib);
+    }
+}
+
+/* UI_LIB_NAS_UP: the folder above, the shares, then the NAS page. */
+static void nas_up(ui_library *lib)
+{
+    if (nas.share[0] == '\0') {
+        nas_close();
+        ui_library_nas_page(lib);
+        return;
+    }
+    if (nas.path[0] == '\0') {
+        nas_list_shares(lib);
+        return;
+    }
+    char *slash = strrchr(nas.path, '/');
+    if (slash != NULL) {
+        *slash = '\0';
+    } else {
+        nas.path[0] = '\0';
+    }
+    if (!nas_list_folder(lib)) {
+        nas_list_shares(lib);
+    }
+}
+
+/* A credentials section name for the NAS (credentials.md §3): the one that already logs in to
+   it, else "nas-" and its address with every other character as '-'. */
+static void nas_section_name(char *out, size_t size)
+{
+    const xc_cred_section *s = have_creds ? xc_cred_for_smb(&creds, nas.host, nas.port) : NULL;
+    if (s != NULL) {
+        snprintf(out, size, "%s", s->name);
+        return;
+    }
+    int n = snprintf(out, size, "nas-%s", nas.host);
+    for (int i = 4; i < n && (size_t)i < size; i++) {
+        char c = out[i];
+        bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                  c == '_' || c == '-';
+        out[i] = ok ? c : '-';
+    }
+    if (n > XC_CRED_MAX_NAME) {
+        out[XC_CRED_MAX_NAME] = '\0';
+    }
+}
+
+/* UI_LIB_NAS_USE: the login into the credentials file (unless it's a guest) and an @smb line
+   for the folder into the map; then the map is loaded again, the folder listed with it. */
+static bool nas_use(char *done, size_t done_size, char *msg, size_t size)
+{
+    static xc_smb_url u;
+    memset(&u, 0, sizeof u);
+    snprintf(u.host, sizeof u.host, "%s", nas.host);
+    u.port = nas.port;
+    u.is_ipv4 = false;
+    snprintf(u.share, sizeof u.share, "%s", nas.share);
+    snprintf(u.path, sizeof u.path, "%s", nas.path);
+    char url[XC_SMB_MAX_URL + 64];
+    static char line[XC_MAP_MAX_LINE + 1];
+    char why_not[200];
+    xc_err err = xc_smb_url_format(&u, url, sizeof url);
+    if (err == XC_OK) {
+        err =
+            xc_map_new_line(XC_MAP_LINE_SMB, NULL, url, line, sizeof line, why_not, sizeof why_not);
+    }
+    if (err != XC_OK) {
+        snprintf(msg, size, "Not added: %s.",
+                 err == XC_ERR_LIMIT ? "the address is too long" : why_not);
+        return false;
+    }
+    /* The login first, so the map finds the folder with it. */
+    char section_name[XC_CRED_MAX_NAME + 8];
+    nas_section_name(section_name, sizeof section_name);
+    char pattern[XC_SMB_MAX_HOST + 8];
+    if (nas.port != XC_SMB_PORT) {
+        snprintf(pattern, sizeof pattern, "%s:%u", nas.host, (unsigned)nas.port);
+    } else {
+        snprintf(pattern, sizeof pattern, "%s", nas.host);
+    }
+    bool had_login = have_creds && xc_cred_for_smb(&creds, nas.host, nas.port) != NULL;
+    if (!nas.guest) {
+        static char section[XC_CRED_MAX_NAME + XC_SMB_MAX_HOST + XC_SMB_MAX_USER +
+                            XC_SMB_MAX_DOMAIN + XC_SMB_NTHASH_HEX + 96];
+        err = xc_cred_smb_section(section_name, pattern, nas.user,
+                                  nas.domain[0] != '\0' ? nas.domain : NULL, nas.nthash, section,
+                                  sizeof section);
+        if (err != XC_OK) {
+            snprintf(msg, size, "%s",
+                     "Not added: the user name can't be kept in the credentials "
+                     "file (no \\ / : @ or \").");
+            return false;
+        }
+        if (!write_section(section_name, section, msg, size)) {
+            return false;
+        }
+        out("NAS login [%s] for %s written to %s\n", section_name, pattern, CRED_FILE);
+    } else if (had_login) {
+        /* A guest now: the login kept before would still be used. */
+        if (!write_section(section_name, NULL, msg, size)) {
+            return false;
+        }
+        out("NAS login [%s] removed: the NAS is used as a guest\n", section_name);
+    }
+    reload_credentials();
+    /* The map: the line once, at the end. */
+    char *old = NULL;
+    size_t old_len = 0;
+    if (!read_map(&old, &old_len, msg, size)) {
+        return false;
+    }
+    static xc_map_line lines[MAX_SOURCES];
+    size_t count = 0;
+    bool have = false;
+    if (old != NULL && xc_map_lines(old, old_len, lines, MAX_SOURCES, &count) == XC_OK) {
+        for (size_t i = 0; i < count && i < MAX_SOURCES; i++) {
+            have = have || (lines[i].text_len == strlen(line) &&
+                            memcmp(lines[i].text, line, lines[i].text_len) == 0);
+        }
+    }
+    if (!have) {
+        char *text = NULL;
+        size_t len = 0;
+        err = xc_map_add_line(old, old_len, line, &text, &len);
+        free(old);
+        old = NULL;
+        if (err != XC_OK) {
+            map_error(err, msg, size);
+            return false;
+        }
+        bool ok = write_map(text, len, msg, size);
+        free(text);
+        if (!ok) {
+            return false;
+        }
+        out("Map: added \"%s\"\n", line);
+    }
+    free(old);
+    snprintf(done, done_size, "%s %s.", have ? "Already in the map:" : "Added", url + 6);
+    return true;
 }
 
 /* The library screen, until the user leaves for the dashboard. */
@@ -2368,6 +3023,28 @@ static void library(game *games, ui_lib_item *items, int count)
                                 msg);
             } else if (a == UI_LIB_FOLDER) {
                 change_folder(&lib, games, items, count);
+            } else if (a == UI_LIB_PLAY) {
+                play(&lib, games);
+            } else if (a == UI_LIB_NAS_SCAN) {
+                nas_scan(&lib);
+            } else if (a == UI_LIB_NAS_LOGIN) {
+                nas_login(&lib);
+            } else if (a == UI_LIB_NAS_OPEN) {
+                nas_open(&lib);
+            } else if (a == UI_LIB_NAS_UP) {
+                nas_up(&lib);
+            } else if (a == UI_LIB_NAS_USE) {
+                char done[XC_SMB_MAX_URL + 64];
+                char msg[320];
+                if (nas_use(done, sizeof done, msg, sizeof msg)) {
+                    reload_map(&lib, &games, &items, &count, &shown);
+                    resume = -1;
+                    snprintf(msg, sizeof msg, "%s %d game%s listed now.", done, count,
+                             count == 1 ? "" : "s");
+                    ui_library_tell(&lib, "NAS FOLDER ADDED", msg);
+                } else {
+                    ui_library_tell(&lib, "NOT ADDED", msg);
+                }
             } else if (resume >= 0 && lib.typing_for == UI_LIB_TYPING_NONE) {
                 resume = -1; /* the keyboard was cancelled: nothing carries on */
             }

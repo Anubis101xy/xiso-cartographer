@@ -25,13 +25,17 @@ SRCS = $(CURDIR)/main.c \
        $(CORE_DIR)/src/http.c \
        $(CORE_DIR)/src/http_client.c \
        $(CORE_DIR)/src/install.c \
+       $(CORE_DIR)/src/folder_image.c \
        $(CORE_DIR)/src/installed.c \
        $(CORE_DIR)/src/journal.c \
        $(CORE_DIR)/src/json.c \
        $(CORE_DIR)/src/login.c \
        $(CORE_DIR)/src/map.c \
        $(CORE_DIR)/src/map_edit.c \
+       $(CORE_DIR)/src/md4.c \
+       $(CORE_DIR)/src/netbios.c \
        $(CORE_DIR)/src/settings.c \
+       $(CORE_DIR)/src/smb.c \
        $(CORE_DIR)/src/source.c \
        $(CORE_DIR)/src/text.c \
        $(CORE_DIR)/src/ui_script.c \
@@ -50,6 +54,9 @@ include $(CURDIR)/tls.mk
 
 # Zip archives (ADR 0009): core/src/install.c installs their images.
 include $(CURDIR)/zip.mk
+
+# NAS shared folders over SMB (ADR 0018): libsmb2, the SMB client and the NAS scan.
+include $(CURDIR)/smb.mk
 
 # The screens (M8, ADR 0015): app/ui's sources, SDL2 and SDL_ttf; and the screens only this XBE
 # has: the startup screen, and the UI script's player (it needs core/src/ui_script.c).

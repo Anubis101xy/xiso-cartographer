@@ -46,6 +46,14 @@
 #define LWIP_TCP_SACK_OUT 1
 
 /* 32-bit statistics counters: 16-bit ones wrap after 94 MB of frames (xc_nx_tcp_counters_get). */
+/* The NAS scan (docs/formats/smb.md §5) asks 16 addresses at once, beside the app's own
+ * connections: lwIP's socket table (MEMP_NUM_NETCONN, 4 by default) and ARP table (10 by
+ * default) must hold them, or SYNs are dropped while their ARP answers are pending. */
+#undef MEMP_NUM_NETCONN
+#define MEMP_NUM_NETCONN 32
+#undef ARP_TABLE_SIZE
+#define ARP_TABLE_SIZE 64
+
 #define LWIP_STATS_LARGE 1
 
 /* Pool statistics: the most driver receive buffers in use at once (xc_nx_tcp_counters_get). */

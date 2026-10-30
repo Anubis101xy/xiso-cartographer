@@ -60,6 +60,8 @@ The app's XBE gets its title image after `cxbe` makes it: `tools/ui/xbe_title_im
 
 XBEs with HTTPS include [`app/tls.mk`](../app/tls.mk): BearSSL, `core/src/tls.c`, `core/src/sntp.c`, `core/src/hash.c`, the CA bundle (embedded at build time, so the build needs `python3`, which the image has) and `platform/nxdk/src/nx_tls.c`. nxdk compiles without optimisation by default; `tls.mk` builds BearSSL and `tls.c` with `-O2`, since unoptimised crypto would understate the TLS speed several times over. BearSSL's object files land in its submodule folder, which git is told to ignore (`ignore = untracked` in `.gitmodules`).
 
+The app also includes [`app/smb.mk`](../app/smb.mk): libsmb2 from [`third_party/libsmb2/`](../third_party/libsmb2/xcat/README.md) (LGPL-2.1, vendored with a small nxdk port), built at `-O2` with its warnings off like BearSSL, and the SMB client and NAS scan from `platform/smb/` ([ADR 0018](adr/0018-smb-sources.md)). The NAS scan opens 16 connections at a time, so `lwipopts.h` also raises lwIP's socket table (`MEMP_NUM_NETCONN` 32) and ARP table (`ARP_TABLE_SIZE` 64); rebuild the image after pulling this change.
+
 Every CI run also uploads all of these files as the `xiso-cartographer-xbe-<sha>` artifact (`xbe` job).
 
 ## Run in xemu
@@ -78,6 +80,7 @@ The map is a **catalog to pick from**: nothing installs until you choose it. At 
 The list holds:
 
 1. **Every entry of the map `E:\xcat\map.txt`** ([map.md](formats/map.md)), including the games an `@archiveorg <item>` line lists (by name and size, [archiveorg.md](formats/archiveorg.md)). They download over HTTP and install while they stream in. Nothing is stored except the game's files ([ADR 0004](adr/0004-streaming-install.md)), so images of 4 GiB and more, such as full-disc dumps, install too. Entries that need a login use `E:\Apps\xcat\credentials` ([credentials.md](formats/credentials.md)). Entries can be `http://` or `https://` (see [HTTPS](#https) below). An entry whose URL ends in `.zip` installs the zip's one image (see [Zips](#zips) below).
+   `@smb smb://<NAS>/<share>/<folder>` lines list the images (`.iso`, `.xiso`, `.zip`) and extracted game folders (a folder with a `default.xbe`) in a NAS's shared folder, which install over SMB the same way, resumably ([smb.md](formats/smb.md); see [NAS](#nas) below).
 2. **Every image or zip in `E:\xcat\isos\`** (`*.iso`, `*.zip`), as in M2. These must be under 4 GiB, since FATX can't store a larger file.
 3. If there's neither, the bundled test image from `D:\samples\` (`D:` is the folder or disc the XBE was started from), copied to `E:\xcat\isos\` first.
 
@@ -113,6 +116,15 @@ The first `https://` URL (a map entry, an `@include`, or a redirect from `http:/
 After each HTTPS install the log shows the TLS version and suite the server chose.
 
 **Hold LT + RT + Back + Black** (the shortcut rocky5's tools use) at any time to return to the dashboard, including mid-install or while it waits out a network outage. An install stopped this way keeps everything written so far and resumes on the next start. Confirmed on hardware on 2026-10-15 ([testing.md](testing.md#results-log)).
+
+### NAS
+
+Games on a NAS (or a PC's shared folder) install over SMB2/3, with no PC or HTTP server in between ([ADR 0018](adr/0018-smb-sources.md), [smb.md](formats/smb.md), the setup guide [nas-setup.md](nas-setup.md)):
+
+- **SETTINGS > NAS** scans the console's network for file sharing servers (TCP 445 on each address of its /24, then each one's NetBIOS name), or takes a typed address; logs in with a user name and password on the on-screen keyboard (none: a guest); lists the shares and browses folders; and **Use this folder** writes the login to the credentials file, as an NT hash ([credentials.md §4.1](formats/credentials.md#41-smb-logins)), and an `@smb` line to the map, then lists the games.
+- Images install like HTTP ones: streamed, resumable, checked. An extracted game folder is listed level by level and installed as if it were an image ([folder-image.md](formats/folder-image.md)): the same FATX checks, journal and read-back.
+- **PLAY:** A on an installed game starts its `default.xbe`.
+- The log names the NAS's own reason for a failure (`E:\xcat\install.log`), never the login.
 
 ## Run on hardware
 

@@ -53,7 +53,15 @@ typedef enum xc_err {
     XC_ERR_CATALOG,         /* the catalog file breaks docs/formats/catalog.md (§7) */
     XC_ERR_SETTINGS,        /* the settings file is invalid (docs/formats/settings.md §5) */
     XC_ERR_UI_SCRIPT,       /* the UI script is invalid (docs/formats/ui-script.md §5) */
-    XC_ERR_COUNT_           /* number of codes; not an error */
+    XC_ERR_SMB_URL,         /* not an accepted smb:// URL (docs/formats/smb.md §1) */
+    XC_ERR_SMB_LOGIN,       /* the NAS refused the user name or password (smb.md §4) */
+    XC_ERR_SMB_SHARE,       /* the NAS has no share of that name (smb.md §4) */
+    XC_ERR_SMB_DENIED,      /* the login may not open that share, folder or file (smb.md §4) */
+    XC_ERR_SMB_NOT_FOUND,   /* no such folder or file on the share (smb.md §4) */
+    XC_ERR_SMB,             /* any other SMB failure; the log has the server's reason */
+    XC_ERR_GAME_FOLDER, /* a game folder holds something an install can't take (folder-image.md §2)
+                         */
+    XC_ERR_COUNT_       /* number of codes; not an error */
 } xc_err;
 
 /* Returns a short, user-readable description. Never NULL, even for unknown values. */

@@ -5,11 +5,14 @@
  * checked against the guarantees the HTTP client relies on; a violation aborts:
  *
  *   - limits hold (sections, patterns, headers, name lengths);
- *   - every section has hosts and something to send;
+ *   - every section has hosts and something to send: HTTP credentials, or an SMB login
+ *     (user and 32 hex digits of NT hash, §4.1);
  *   - the emitted header lines are well formed: "Name: value\r\n" with no CR, LF
  *     or other control character anywhere else, so a value can't inject a header;
- *   - every pattern selects its own section over https (no overlap, §5), and a
- *     plain-http request gets credentials only from a section with allow_http.
+ *   - every pattern of an HTTP section selects its own section over https (no overlap,
+ *     §5), and a plain-http request gets credentials only from a section with allow_http;
+ *   - every exact pattern of an SMB section selects it for SMB (no overlap among them), and
+ *     an SMB-only section is never sent over HTTP.
  *
  * Seeds are in core/tests/fuzz-seeds/credentials/. Built like fuzz_http.c.
  */
@@ -19,6 +22,7 @@
 #include <string.h>
 
 #include "xcat/credentials.h"
+#include "xcat/smb.h"
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 
@@ -68,7 +72,15 @@ static void check_selects(const xc_credentials *c, const xc_cred_section *s,
         check(p->wildcard); /* only "x." + a 252-253 byte host can be too long */
         return;
     }
-    check(xc_cred_for_url(c, &u) == s);
+    bool http = s->cookie != NULL || s->header_count > 0;
+    const xc_cred_section *got = xc_cred_for_url(c, &u);
+    check(http ? got == s : got != s);
+    if (s->smb_user != NULL && !p->wildcard) {
+        check(xc_cred_for_smb(c, p->host, p->any_port ? 445 : p->port) == s);
+    }
+    if (!http) {
+        return;
+    }
     /* The same host over plain http: only allow_http sections, and only for IPv4. */
     memmove(text + 4, text + 5, strlen(text + 5) + 1);
     check(xc_url_parse(text, strlen(text), &u) == XC_OK);
@@ -93,7 +105,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         check(name_len >= 1 && name_len <= XC_CRED_MAX_NAME);
         check(s->pattern_count >= 1 && s->pattern_count <= XC_CRED_MAX_PATTERNS);
         check(s->header_count <= XC_CRED_MAX_HEADERS);
-        check(s->cookie != NULL || s->header_count > 0);
+        check(s->cookie != NULL || s->header_count > 0 || s->smb_user != NULL);
+        check((s->smb_user == NULL) == (s->smb_nthash == NULL));
+        check(s->smb_nthash == NULL || xc_smb_valid_nthash(s->smb_nthash));
+        check(s->smb_domain == NULL || s->smb_user != NULL);
         check_headers(s);
         for (size_t k = 0; k < s->pattern_count; k++) {
             check_selects(&c, s, &s->patterns[k]);

@@ -8,7 +8,9 @@
  * leaving for the dashboard. GAMES lists what can be installed, INSTALLED what's in the install
  * folder, and SETTINGS where games install (docs/formats/settings.md), Authentication (the
  * servers the map uses and their logins, with the archive.org account: log in and out, ADR
- * 0010) and Map sources (the map's own lines, added and removed: map.md §9). Y searches GAMES
+ * 0010), Map sources (the map's own lines, added and removed: map.md §9) and NAS (finding a
+ * NAS on the network, logging in and choosing a shared folder: smb.md, ADR 0018). A on an
+ * installed game asks to play it. Y searches GAMES
  * with the on-screen
  * keyboard (keyboard.h), which also takes the email and password. Plain C over ui_draw like the
  * widgets, tested on the PC (test_ui_library).
@@ -61,6 +63,15 @@ typedef enum ui_lib_action {
     UI_LIB_ADD_SOURCE,    /* add a source of kind add_kind from add_url (and add_key) */
     UI_LIB_REMOVE_SOURCE, /* remove sources[ui_library_source()]: the user said yes */
     UI_LIB_SOURCE_KIND,   /* (internal: the dialog asking what kind of source to add) */
+    UI_LIB_PLAY,          /* start the highlighted installed game: in GAMES ui_library_game(),
+                             in INSTALLED ui_library_installed() (lib->section says which) */
+    UI_LIB_NAS_SCAN,      /* scan the network for a NAS, then ui_library_set_nas */
+    UI_LIB_NAS_LOGIN,     /* log in to lib->nas_addr as lib->nas_user ("": a guest) with
+                             lib->nas_password and list its shares (ui_library_browse); then
+                             ui_library_forget_nas_password */
+    UI_LIB_NAS_OPEN,      /* open browse entry ui_library_browse_entry() */
+    UI_LIB_NAS_UP,        /* B while browsing: one level up (the shares, then the NAS page) */
+    UI_LIB_NAS_USE,       /* add the folder being browsed to the map: the user said yes */
 } ui_lib_action;
 
 /* What kind of source to add to the map. */
@@ -78,6 +89,9 @@ typedef enum ui_lib_typing {
     UI_LIB_TYPING_FOLDER,
     UI_LIB_TYPING_SOURCE,   /* the identifier or URL of a new source */
     UI_LIB_TYPING_TITLE_ID, /* a new image's title ID */
+    UI_LIB_TYPING_NAS_ADDRESS,
+    UI_LIB_TYPING_NAS_USER,
+    UI_LIB_TYPING_NAS_PASSWORD,
 } ui_lib_typing;
 
 /* SETTINGS' lines. */
@@ -85,6 +99,7 @@ typedef enum ui_lib_setting {
     UI_LIB_SETTING_FOLDER,  /* where games install */
     UI_LIB_SETTING_LOGINS,  /* Authentication: the servers and their logins */
     UI_LIB_SETTING_SOURCES, /* Map sources: the map's own lines */
+    UI_LIB_SETTING_NAS,     /* NAS: find one, log in, choose a shared folder */
     UI_LIB_SETTING_COUNT_
 } ui_lib_setting;
 
@@ -94,6 +109,8 @@ typedef enum ui_lib_page {
     UI_LIB_PAGE_FOLDERS, /* the folders to install to, then "Other folder" */
     UI_LIB_PAGE_LOGINS,  /* Authentication's servers */
     UI_LIB_PAGE_SOURCES, /* "Add source", then the map's sources */
+    UI_LIB_PAGE_NAS,     /* "Scan the network", "Type an address", then what the scan found */
+    UI_LIB_PAGE_BROWSE,  /* a NAS's shares, or a folder's folders, maybe after "Use this folder" */
 } ui_lib_page;
 
 /* A server on the Authentication page, as the caller describes it. */
@@ -112,6 +129,19 @@ typedef struct ui_lib_source {
     const char *about; /* wrapped below it: the whole line, and any problem; may be NULL */
 } ui_lib_source;
 
+/* A NAS the scan found, as the caller describes it. */
+typedef struct ui_lib_nas {
+    const char *name;    /* the list's line: its NetBIOS name, else its address */
+    const char *address; /* what logging in connects to: "192.168.1.50" or "nas:4450" */
+    const char *note;    /* under it, small; may be NULL */
+} ui_lib_nas;
+
+/* A share or folder while browsing a NAS, as the caller describes it. */
+typedef struct ui_lib_entry {
+    const char *name;
+    const char *note; /* may be NULL */
+} ui_lib_entry;
+
 /* A folder SETTINGS offers to install to, as the caller describes it. */
 typedef struct ui_lib_folder {
     const char *path; /* "F:\Games" */
@@ -124,6 +154,8 @@ typedef struct ui_lib_folder {
 #define UI_LIB_FOLDER_MAX 67    /* with the NUL: xcat/settings.h's XC_SETTINGS_DIR_SIZE */
 #define UI_LIB_URL_MAX 512      /* a new source's identifier or URL, with the NUL */
 #define UI_LIB_KEY_MAX 32       /* a new image's title ID, with the NUL */
+#define UI_LIB_NAS_ADDR_MAX 64  /* a NAS's address with its port, with the NUL */
+#define UI_LIB_NAS_USER_MAX 129 /* with the NUL: xcat/smb.h's 128 bytes */
 
 typedef struct ui_library {
     const ui_lib_item *items; /* GAMES: every game */
@@ -154,7 +186,20 @@ typedef struct ui_library {
     char add_url[UI_LIB_URL_MAX];
     char add_key[UI_LIB_KEY_MAX];
     char folder[UI_LIB_FOLDER_MAX]; /* UI_LIB_FOLDER's, and the keyboard's for "Other folder" */
-    const ui_lib_item *installed;   /* INSTALLED: the folders in install_dir */
+    const ui_lib_nas *nas;          /* UI_LIB_PAGE_NAS: what the scan found, the caller's */
+    int nas_count;
+    const char *nas_status; /* how the last scan went, the caller's; may be NULL */
+    ui_list nas_list;       /* over "Scan the network", "Type an address", then nas */
+    char nas_addr[UI_LIB_NAS_ADDR_MAX];
+    char nas_user[UI_LIB_NAS_USER_MAX];
+    char nas_password[UI_LIB_PASSWORD_MAX]; /* wiped when the login is done or cancelled */
+    const ui_lib_entry *browse;             /* UI_LIB_PAGE_BROWSE: the caller's */
+    int browse_count;
+    bool browse_use;          /* "Use this folder" comes first */
+    const char *browse_title; /* where we are, the caller's */
+    const char *browse_about; /* what's here, the caller's; may be NULL */
+    ui_list browse_list;
+    const ui_lib_item *installed; /* INSTALLED: the folders in install_dir */
     int installed_count;
     ui_list installed_list;
     ui_lib_section section;
@@ -199,6 +244,27 @@ void ui_library_set_sources(ui_library *lib, const ui_lib_source *sources, int c
    source". */
 int ui_library_source(const ui_library *lib);
 
+/* The index in the INSTALLED list of the highlighted folder. */
+int ui_library_installed(const ui_library *lib);
+
+/* Gives the NAS page what a scan found (the strings stay the caller's), and a line saying how
+   the scan went (may be NULL). */
+void ui_library_set_nas(ui_library *lib, const ui_lib_nas *nas, int count, const char *status);
+
+/* Shows a NAS's shares, or a folder's folders, after "Use this folder" if `can_use` (the
+   strings stay the caller's), with the first line highlighted. */
+void ui_library_browse(ui_library *lib, const char *title, const char *about,
+                       const ui_lib_entry *entries, int count, bool can_use);
+
+/* The index in the browse entries of the highlighted line, or -1 for "Use this folder". */
+int ui_library_browse_entry(const ui_library *lib);
+
+/* Back from browsing to the NAS page. */
+void ui_library_nas_page(ui_library *lib);
+
+/* Wipes the NAS password typed for UI_LIB_NAS_LOGIN, once the login has used it. */
+void ui_library_forget_nas_password(ui_library *lib);
+
 /* Gives GAMES a new list of games (after the map changed): every game listed, the search and
    the highlight cleared. `shown` has room for `count` ints. */
 void ui_library_set_items(ui_library *lib, const ui_lib_item *items, int count, int *shown);
@@ -234,7 +300,13 @@ int ui_library_rows(const ui_draw *d);
    the map's lines. A on "Add source" asks what kind (ARCHIVE.ORG, MAP or IMAGE; B closes it),
    then opens the keyboard for the identifier or URL, and for an image the title ID too; DONE
    gives UI_LIB_ADD_SOURCE, and B there adds nothing (what was typed stays for the next try).
-   A on a line asks before UI_LIB_REMOVE_SOURCE. In a dialog or the keyboard, their buttons. */
+   A on a line asks before UI_LIB_REMOVE_SOURCE. A on NAS lists "Scan the network" (A gives
+   UI_LIB_NAS_SCAN), "Type an address" (the keyboard), then what the scan found; after an
+   address, the keyboard asks the user name (DONE on none logs in as a guest) and the password
+   (dots only), and gives UI_LIB_NAS_LOGIN; B wipes the password. While browsing, A on a line
+   gives UI_LIB_NAS_OPEN, A on "Use this folder" asks before UI_LIB_NAS_USE, and B gives
+   UI_LIB_NAS_UP. A on an installed game, in GAMES or INSTALLED, asks before UI_LIB_PLAY. In a
+   dialog or the keyboard, their buttons. */
 ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows);
 
 /* The name of what the screen shows, for the UI script (docs/formats/ui-script.md §6): an open

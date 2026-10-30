@@ -20,7 +20,11 @@ extern "C" {
 #define XC_URL_MAX_HOST 253    /* bytes in a host name (§2.1) */
 #define XC_URL_MAX_TARGET 4096 /* bytes in a request target, after percent-encoding (§1) */
 
-typedef enum xc_url_scheme { XC_URL_HTTP, XC_URL_HTTPS } xc_url_scheme;
+typedef enum xc_url_scheme {
+    XC_URL_HTTP,
+    XC_URL_HTTPS,
+    XC_URL_SMB /* only in xc_map_host: an smb:// source (docs/formats/smb.md); never parsed here */
+} xc_url_scheme;
 
 typedef struct xc_url {
     xc_url_scheme scheme;

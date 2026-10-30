@@ -72,9 +72,10 @@ static void test_install_asks_first(void)
     ui_library lib;
     ui_library_open(&lib, items, 3, shown);
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, lib.asking);
-    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Second game"));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Third game"));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5)); /* CANCEL */
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
@@ -82,8 +83,117 @@ static void test_install_asks_first(void)
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5));
-    TEST_ASSERT_EQUAL_INT(1, lib.list.cur); /* the game asked about */
+    TEST_ASSERT_EQUAL_INT(2, lib.list.cur); /* the game asked about */
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+}
+
+/* An installed game: A asks to play it; in GAMES it can also be installed again. */
+static void test_play_installed(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PLAY, lib.asking);
+    TEST_ASSERT_EQUAL_STRING("ask-play", ui_library_screen(&lib));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Second game"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PLAY, ui_library_input(&lib, UI_BTN_A, 5));
+    /* INSTALL AGAIN, the middle button */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5));
+    /* B cancels */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+
+    /* INSTALLED: A on a finished install asks to play it; on an unfinished one, nothing. */
+    static const ui_lib_item found[2] = {
+        {"Halo", "4.1 GB", NULL, UI_LIB_INSTALLED, "E:\\Games\\Halo"},
+        {"Fable", NULL, NULL, UI_LIB_UNFINISHED, "E:\\Games\\Fable"},
+    };
+    ui_library_set_installed(&lib, found, 2);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_LEFT, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALLED_GAMES, lib.section);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PLAY, lib.asking);
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Halo"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PLAY, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(0, ui_library_installed(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+}
+
+/* SETTINGS > NAS: scan, type an address or pick a server, log in, browse, add a folder. */
+static void test_nas(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_LEFT, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_SETTINGS, lib.section);
+    for (int i = 0; i < UI_LIB_SETTING_NAS; i++) {
+        TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    }
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_STRING("nas", ui_library_screen(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_SCAN, ui_library_input(&lib, UI_BTN_A, 5));
+    static const ui_lib_nas found[1] = {{"TNAS-F4", "192.168.1.50", "192.168.1.50"}};
+    ui_library_set_nas(&lib, found, 1, "1 NAS found.");
+    TEST_ASSERT_EQUAL_INT(3, lib.nas_list.count);
+    /* The server: user name, then password. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_STRING("192.168.1.50", lib.nas_addr);
+    TEST_ASSERT_EQUAL_STRING("keyboard-nas-user", ui_library_screen(&lib));
+    (void)snprintf(lib.nas_user, sizeof lib.nas_user, "%s", "shaun");
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_START, 5));
+    TEST_ASSERT_EQUAL_STRING("keyboard-nas-password", ui_library_screen(&lib));
+    TEST_ASSERT_TRUE(lib.kbd.password);
+    (void)snprintf(lib.nas_password, sizeof lib.nas_password, "%s", "secret");
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_LOGIN, ui_library_input(&lib, UI_BTN_START, 5));
+    ui_library_forget_nas_password(&lib);
+    TEST_ASSERT_EQUAL_STRING("", lib.nas_password);
+    /* Its shares: no "Use this folder" at the top. */
+    static const ui_lib_entry shares[2] = {{"Games", "Xbox games"}, {"Media", NULL}};
+    ui_library_browse(&lib, "TNAS-F4", "2 shared folders.", shares, 2, false);
+    TEST_ASSERT_EQUAL_STRING("nas-browse", ui_library_screen(&lib));
+    TEST_ASSERT_EQUAL_INT(0, ui_library_browse_entry(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_OPEN, ui_library_input(&lib, UI_BTN_A, 5));
+    /* A folder: "Use this folder" first, asked about before it's added. */
+    static const ui_lib_entry folders[1] = {{"Xbox", NULL}};
+    ui_library_browse(&lib, "TNAS-F4 > Games", "3 images here.", folders, 1, true);
+    TEST_ASSERT_EQUAL_INT(-1, ui_library_browse_entry(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_STRING("ask-nas-use", ui_library_screen(&lib));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "TNAS-F4 > Games"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_USE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(0, ui_library_browse_entry(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_OPEN, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_UP, ui_library_input(&lib, UI_BTN_B, 5));
+    ui_library_nas_page(&lib);
+    TEST_ASSERT_EQUAL_STRING("nas", ui_library_screen(&lib));
+    /* Type an address; no user name logs in as a guest, with no password asked. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_UP, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_STRING("keyboard-nas-address", ui_library_screen(&lib));
+    (void)snprintf(lib.nas_addr, sizeof lib.nas_addr, "%s", "nas.lan:4450");
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_START, 5));
+    lib.nas_user[0] = '\0';
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_LOGIN, ui_library_input(&lib, UI_BTN_START, 5));
+    /* Drawn without trouble on each page. */
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    ui_library_browse(&lib, "TNAS-F4", NULL, NULL, 0, false);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(count_text("Nothing here this login can open. B goes back.") > 0 ||
+                     count_kind('t') > 0);
 }
 
 static void test_back_asks_before_leaving(void)
@@ -798,6 +908,8 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_open);
     RUN_TEST(test_install_asks_first);
+    RUN_TEST(test_play_installed);
+    RUN_TEST(test_nas);
     RUN_TEST(test_back_asks_before_leaving);
     RUN_TEST(test_sections);
     RUN_TEST(test_empty);

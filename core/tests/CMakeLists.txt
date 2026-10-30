@@ -123,6 +123,9 @@ add_dependencies(test_xdvdfs xcat_fixtures)
 xcat_add_test(test_extract)
 xcat_add_test(test_fatx)
 xcat_add_test(test_url)
+xcat_add_test(test_folder_image)
+xcat_add_test(test_smb)
+xcat_add_test(test_netbios)
 xcat_add_test(test_http)
 xcat_add_test(test_http_client)
 # TLS against an in-process BearSSL server, with the committed test certificates.
@@ -341,6 +344,19 @@ xcat_add_fuzzer(fuzz_tls_anchors SEEDS ${_tls_seeds})
 # SNTP answer seeds are committed, written by tools/fixtures/sntp_seeds.py.
 file(GLOB _sntp_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/sntp/*.seed)
 xcat_add_fuzzer(fuzz_sntp SEEDS ${_sntp_seeds})
+
+# smb:// URL seeds are committed (docs/formats/smb.md §1).
+file(GLOB _smb_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/smb/*.seed)
+xcat_add_fuzzer(fuzz_smb SEEDS ${_smb_seeds})
+
+# Game folder listing seeds are committed (docs/formats/folder-image.md).
+file(GLOB _folder_image_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/folder-image/*.seed)
+xcat_add_fuzzer(fuzz_folder_image SEEDS ${_folder_image_seeds})
+
+# NetBIOS node status answer seeds are committed: synthetic answers as Samba and Windows send
+# them (docs/formats/smb.md §5).
+file(GLOB _netbios_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/netbios/*.seed)
+xcat_add_fuzzer(fuzz_netbios SEEDS ${_netbios_seeds})
 
 # Zip and Deflate seeds are committed, written by tools/fixtures/zip_seeds.py.
 file(GLOB _zip_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/zip/*.seed)

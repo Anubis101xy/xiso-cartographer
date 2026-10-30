@@ -421,6 +421,38 @@ The app's logo as its XBE's title image ([xbe-title-image.md](formats/xbe-title-
 | 1 | Hardware | Copy `app/bin/` as usual, over the old `default.xbe`; open the folder in the dashboard you use (UnleashX, XBMC, XBMC4Gamers) | The app's entry shows the green logo. If it still shows the old picture or none, reset the dashboard's thumbnail cache (or rename the folder) and look again |
 | 2 | Hardware | Launch the app | It starts as before |
 
+## NAS over SMB
+
+[ADR 0018](adr/0018-smb-sources.md): installs from a NAS's shared folder, the NAS scan and PLAY.
+
+**On the PC** (done, 2026-10-30). The core parts are unit-tested and fuzzed (`test_smb`, `test_netbios`, `test_folder_image`, the SMB parts of `test_credentials`, `test_map`, `test_map_edit`; `fuzz_smb`, `fuzz_netbios`, `fuzz_folder_image`, `fuzz_credentials`, `fuzz_map`). The client was run with `xcat-cli` against two servers on loopback: Impacket's `SimpleSMBServer` (SMB2, a user with a password) and a Go server (SMB2/3, guest), serving synthetic fixtures only:
+
+| Check | Result |
+|---|---|
+| `smb-shares`, `smb-ls`, `smb-ls --tree` | Disk shares only; images and game folders found, two levels down; recycle bins and `@` folders left out |
+| NT-hash login (Impacket), guest (Go), wrong password | Logged in; logged in; `XC_ERR_SMB_LOGIN` |
+| `map` with `@smb` lines on both servers | Entries named as smb.md §3 says, game folders with a `/` |
+| `install` of an xiso, a zip (Deflate) and a full-disc image | Byte for byte as the fixtures' manifests |
+| `install` of game folders: 9 files, and 402 files in nested folders (15 MiB, empty files and folders, files of 2047–2049 bytes) | Identical to the folder (`diff -r`), but for the names smb.md §3.2 leaves out; 25 MB/s from the Go server, 0.9 MB/s from Impacket (its Python is the limit) |
+| The server stopped mid-install and back within the reconnect | 1 reconnection, same bytes, install finishes |
+| The server stopped mid-install for longer | Fails with `XC_ERR_NET_CONNECT`; running it again resumes (169 files kept, 233 written), identical result |
+| The folder changed between the two attempts | Not continued into: installed to "Title (2)" (ADR 0008), the old folder left for the user |
+| `smb-scan` of a /24 on loopback | Both servers found (127.0.0.1, 127.0.0.2) |
+| A NAS that's off | Fails in 3 s (the probe), not 20 |
+
+**On the console** (to do: lwIP and the scan can't be tested on the PC):
+
+| Step | How | Pass |
+|---|---|---|
+| 1 | SETTINGS > NAS > Scan the network | The NAS is listed by name and address within ~15 s |
+| 2 | Type an address: the NAS's IP | Asks for the user name |
+| 3 | Log in with the console's NAS user; then a wrong password | Shares listed; "The NAS refused the user name or password" |
+| 4 | Browse to the games folder, Use this folder | `E:\Apps\xcat\credentials` has the section (no password), `E:\xcat\map.txt` the `@smb` line; GAMES lists the folder's images and game folders |
+| 5 | Install an `.iso`, a `.zip` and a game folder | Each verified; `install.log` shows MB/s and 0 reconnections |
+| 6 | Pull the network cable mid-install for 10 s, put it back, RETRY | Resumes; the result is verified |
+| 7 | INSTALLED > A > PLAY | The game starts |
+| 8 | Switch the NAS off, start the app | The list loads (3 s per `@smb` folder), installing from it says the NAS doesn't answer |
+
 ## FATX probe (M2)
 
 No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/src/fatx.c` ([fatx-names.md](formats/fatx-names.md)) come from the console's own kernel, measured by `app/fatx-probe`.

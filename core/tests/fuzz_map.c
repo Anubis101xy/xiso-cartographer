@@ -18,6 +18,7 @@
  * Seeds are in core/tests/fuzz-seeds/map/. Built like fuzz_http.c.
  */
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -38,6 +39,35 @@ static void check(int ok)
     if (!ok) {
         abort();
     }
+}
+
+/* An @smb folder (§5.4) holds an image named after its last name, one in a subfolder, a game
+   folder (smb.md §3.1), and a file that isn't an image; a folder named "fail" can't be listed,
+   and one named "game" is itself a game folder. */
+static xc_err list_smb(void *ctx, const xc_smb_url *folder, xc_smb_listing *out)
+{
+    (void)ctx;
+    const char *last = strrchr(folder->path, '/');
+    last = last != NULL ? last + 1 : folder->path[0] != '\0' ? folder->path : folder->share;
+    if (strcmp(last, "fail") == 0) {
+        return XC_ERR_SMB_LOGIN;
+    }
+    if (strcmp(last, "game") == 0) {
+        return xc_smb_listing_add_game(out, "");
+    }
+    char name[XC_SMB_MAX_PATH + 16];
+    (void)snprintf(name, sizeof name, "%s.xiso.iso", last);
+    xc_err err = xc_smb_listing_add(out, name, 4096);
+    if (err == XC_OK) {
+        err = xc_smb_listing_add(out, "sub/Game (USA).zip", 1);
+    }
+    if (err == XC_OK) {
+        err = xc_smb_listing_add(out, "notes.txt", 10);
+    }
+    if (err == XC_OK) {
+        err = xc_smb_listing_add_game(out, "sub/Folder Game #1");
+    }
+    return err;
 }
 
 static xc_err fetch(void *ctx, const char *location, bool is_url, size_t max_len, char **out,
@@ -91,7 +121,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         }
     }
     xc_map map;
-    xc_map_loader loader = {fetch, NULL};
+    xc_map_loader loader = {fetch, NULL, list_smb};
     xc_err err =
         xc_map_load((const char *)part_data[0], part_len[0], "maps/top.txt", &loader, &map);
     check(err == XC_OK || err == XC_ERR_MAP);
@@ -108,6 +138,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     }
     check(stored_errors <= map.error_count);
     static xc_url u;
+    static xc_smb_url su;
     for (size_t i = 0; i < map.entry_count; i++) {
         const xc_map_entry *e = &map.entries[i];
         check(e->source < map.source_count && e->line >= 1);
@@ -115,12 +146,19 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         for (const char *c = e->variant; *c != '\0'; c++) {
             check(!(*c >= 'a' && *c <= 'z'));
         }
-        check(xc_url_parse(e->url, strlen(e->url), &u) == XC_OK);
+        bool smb = xc_smb_is_url(e->url);
+        if (smb) {
+            /* A file, or a game folder (its address ends in '/'), which may be a whole share. */
+            check(xc_smb_url_parse(e->url, strlen(e->url), &su) == XC_OK &&
+                  (su.path[0] != '\0' || e->url[strlen(e->url) - 1U] == '/'));
+        } else {
+            check(xc_url_parse(e->url, strlen(e->url), &u) == XC_OK);
+        }
         if (e->name != NULL) {
-            /* Generated (§5.2): keyed by a unique name, with no title ID or variant. */
+            /* Generated (§5.2, §5.4): keyed by a unique name, with no title ID or variant. */
             check(e->name[0] != '\0' && e->title_id == 0 && e->variant[0] == '\0');
-            check(e->size >= 1);
-            check(strncmp(e->url, "https://archive.org/download/", 29) == 0);
+            check(smb || e->size >= 1);
+            check(smb || strncmp(e->url, "https://archive.org/download/", 29) == 0);
             check(xc_map_find_name(&map, e->name) == e);
             continue;
         }
@@ -137,7 +175,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     check(nh <= 64);
     size_t on_hosts = 0;
     for (size_t i = 0; i < nh; i++) {
-        check(hosts[i].entries + hosts[i].maps >= 1);
+        check(hosts[i].entries + hosts[i].maps + hosts[i].folders >= 1);
+        check(hosts[i].folders == 0 || hosts[i].scheme == XC_URL_SMB);
         check(memchr(hosts[i].host, '\0', sizeof hosts[i].host) != NULL);
         for (size_t k = 0; k < i; k++) {
             check(hosts[k].scheme != hosts[i].scheme || hosts[k].port != hosts[i].port ||

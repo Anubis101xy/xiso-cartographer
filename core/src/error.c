@@ -93,6 +93,20 @@ const char *xc_err_str(xc_err err)
         return "The settings file is invalid";
     case XC_ERR_UI_SCRIPT:
         return "The UI script is invalid";
+    case XC_ERR_SMB_URL:
+        return "Invalid smb:// address";
+    case XC_ERR_SMB_LOGIN:
+        return "The NAS refused the user name or password";
+    case XC_ERR_SMB_SHARE:
+        return "The NAS has no shared folder of that name";
+    case XC_ERR_SMB_DENIED:
+        return "This login may not open that folder or file on the NAS";
+    case XC_ERR_SMB_NOT_FOUND:
+        return "The NAS has no folder or file of that name";
+    case XC_ERR_SMB:
+        return "The NAS (SMB) refused or failed the request";
+    case XC_ERR_GAME_FOLDER:
+        return "The game folder has a name or file that can't be installed";
     case XC_ERR_COUNT_:
         break;
     }
@@ -187,6 +201,19 @@ const char *xc_err_action(xc_err err)
         return "Fix or delete E:\\Apps\\xcat\\settings.";
     case XC_ERR_UI_SCRIPT:
         return "Fix the line the log names in ui-script.txt, or delete the file.";
+    case XC_ERR_SMB_URL:
+        return "Fix the address in the map: smb://<NAS>/<share>/<folder or file>.";
+    case XC_ERR_SMB_LOGIN:
+        return "Add the NAS again in SETTINGS > NAS with the right user name and password.";
+    case XC_ERR_SMB_SHARE:
+    case XC_ERR_SMB_NOT_FOUND:
+        return "Check the shared folder on the NAS, or add the NAS folder again in SETTINGS > NAS.";
+    case XC_ERR_SMB_DENIED:
+        return "Give this user read access to the shared folder in the NAS's settings.";
+    case XC_ERR_SMB:
+        return "Try again; if it keeps failing, check SMB2 or SMB3 is on in the NAS's settings.";
+    case XC_ERR_GAME_FOLDER:
+        return "The log names it: rename or remove it in the game's folder on the NAS.";
     case XC_ERR_COUNT_:
         break;
     }
@@ -210,6 +237,7 @@ bool xc_err_retry(xc_err err)
     case XC_ERR_TLS_NO_RANDOM:
     case XC_ERR_NTP:
     case XC_ERR_ZIP_CRC:
+    case XC_ERR_SMB:
         return true;
     default:
         return false;

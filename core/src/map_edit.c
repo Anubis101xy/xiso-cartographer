@@ -106,6 +106,8 @@ static void classify(const line_at *l, size_t line_no, xc_map_line *m)
             m->kind = XC_MAP_LINE_INCLUDE;
         } else if (parted && name - 1 == 10 && memcmp(t + 1, "archiveorg", 10) == 0) {
             m->kind = XC_MAP_LINE_ARCHIVEORG;
+        } else if (parted && name - 1 == 3 && memcmp(t + 1, "smb", 3) == 0) {
+            m->kind = XC_MAP_LINE_SMB;
         } else {
             m->kind = XC_MAP_LINE_DIRECTIVE;
         }
@@ -194,6 +196,15 @@ static xc_err empty_map(void *ctx, const char *location, bool is_url, size_t max
     return XC_OK;
 }
 
+/* An @smb folder seen as empty: checking a line never lists the NAS. */
+static xc_err empty_listing(void *ctx, const xc_smb_url *folder, xc_smb_listing *out)
+{
+    (void)ctx;
+    (void)folder;
+    (void)out;
+    return XC_OK;
+}
+
 /* Loads `line` alone in a map, as the reader would: XC_OK if it's a valid source, else
    XC_ERR_MAP and why. */
 static xc_err check_alone(const char *line, char *why, size_t why_cap)
@@ -208,7 +219,7 @@ static xc_err check_alone(const char *line, char *why, size_t why_cap)
     memcpy(text + sizeof header - 1U, line, n + 1U);
     text[sizeof header - 1U + n] = '\n';
     xc_map map;
-    xc_map_loader loader = {empty_map, NULL};
+    xc_map_loader loader = {empty_map, NULL, empty_listing};
     xc_err err = xc_map_load(text, sizeof header + n, "map.txt", &loader, &map);
     free(text);
     if (err == XC_ERR_NOMEM) {
@@ -242,6 +253,18 @@ xc_err xc_map_new_line(xc_map_line_kind kind, const char *key, const char *url, 
             return XC_ERR_MAP;
         }
         n = snprintf(out, cap, "@archiveorg %s", url);
+    } else if (kind == XC_MAP_LINE_SMB) {
+        xc_smb_url u;
+        if (!xc_smb_is_url(url) || xc_smb_url_parse(url, strlen(url), &u) != XC_OK) {
+            say(why, why_cap, "a NAS folder's address is smb://<NAS>/<share>[/<folder>]");
+            return XC_ERR_MAP;
+        }
+        char canon[XC_SMB_MAX_URL + 64];
+        if (xc_smb_url_format(&u, canon, sizeof canon) != XC_OK) {
+            say(why, why_cap, "the line is too long");
+            return XC_ERR_LIMIT;
+        }
+        n = snprintf(out, cap, "@smb %s", canon);
     } else if (kind == XC_MAP_LINE_INCLUDE) {
         if (!starts_with_ci(url, "http://") && !starts_with_ci(url, "https://")) {
             say(why, why_cap, "a map's address starts with http:// or https://");

@@ -1,0 +1,7 @@
+# xcat-map v1
+@smb smb://192.168.1.50/Games/Xbox
+4D530004 = smb://nas/Games/Halo.iso
+@smb smb://u@nas/x
+@smb smb://nas/game
+@smb smb://nas/Games/game
+4D530005 = smb://nas/Games/Halo/

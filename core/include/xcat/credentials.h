@@ -48,6 +48,11 @@ typedef struct xc_cred_section {
     const char *header_values[XC_CRED_MAX_HEADERS];
     size_t header_count;
     bool allow_http;
+    /* SMB login (§4.1, docs/formats/smb.md §4): NULL if the section has none. smb_nthash is
+       32 hex digits, never the password. */
+    const char *smb_user;
+    const char *smb_domain; /* NULL: none given */
+    const char *smb_nthash;
 } xc_cred_section;
 
 typedef struct xc_credentials {
@@ -84,6 +89,22 @@ const xc_cred_section *xc_cred_for_url(const xc_credentials *c, const xc_url *ur
  * out[0, cap) and sets *len. XC_ERR_LIMIT if they don't fit.
  */
 xc_err xc_cred_headers(const xc_cred_section *s, char *out, size_t cap, size_t *len);
+
+/*
+ * The section whose SMB login goes to the NAS `host` (lowercased) on `port` (§6.1): one with
+ * smb_user whose hosts match. NULL: none, so the NAS is asked as a guest. SMB sections never
+ * overlap one another (§5), so at most one matches.
+ */
+const xc_cred_section *xc_cred_for_smb(const xc_credentials *c, const char *host, uint16_t port);
+
+/*
+ * Writes a section for an SMB login (§4.1) into out[0, cap): "[name]", then hosts, smb_user,
+ * smb_domain (if `domain` isn't NULL or "") and smb_nthash lines, each ending in "\n", as
+ * xc_cred_set_section takes it. XC_ERR_INVALID_ARG if a value breaks §4.1, XC_ERR_LIMIT if it
+ * doesn't fit.
+ */
+xc_err xc_cred_smb_section(const char *name, const char *host, const char *user, const char *domain,
+                           const char *nthash, char *out, size_t cap);
 
 /* Fills in an xc_http_auth that attaches `c`'s credentials hop by hop. `c` must outlive it. */
 void xc_cred_http_auth(xc_http_auth *auth, const xc_credentials *c);

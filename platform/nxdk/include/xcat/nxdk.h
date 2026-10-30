@@ -81,6 +81,9 @@ xc_err xc_nx_replace_file(const char *path, const void *data, size_t len);
  */
 xc_err xc_nx_net_startup(char *ip, size_t ip_size);
 void xc_nx_net(xc_net *net);
+/* The console's IPv4 address and network mask, after xc_nx_net_startup(); false if it has none
+   (for the NAS scan, docs/formats/smb.md §5). */
+bool xc_nx_net_ipv4(uint8_t ip[4], uint8_t mask[4]);
 /* One UDP request and answer (xc_udp, for SNTP), after xc_nx_net_startup(). */
 void xc_nx_udp(xc_udp *udp);
 

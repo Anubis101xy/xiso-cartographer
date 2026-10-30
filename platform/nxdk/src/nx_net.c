@@ -192,6 +192,20 @@ xc_err xc_nx_net_startup(char *ip, size_t ip_size)
     return XC_OK;
 }
 
+bool xc_nx_net_ipv4(uint8_t ip[4], uint8_t mask[4])
+{
+    if (g_pnetif == NULL) {
+        return false;
+    }
+    uint32_t a = lwip_ntohl(ip4_addr_get_u32(netif_ip4_addr(g_pnetif)));
+    uint32_t m = lwip_ntohl(ip4_addr_get_u32(netif_ip4_netmask(g_pnetif)));
+    for (int i = 0; i < 4; i++) {
+        ip[i] = (uint8_t)(a >> (24 - 8 * i));
+        mask[i] = (uint8_t)(m >> (24 - 8 * i));
+    }
+    return a != 0;
+}
+
 /* --- sockets -------------------------------------------------------------------------- */
 
 typedef enum wait_for { WAIT_READ, WAIT_WRITE } wait_for;

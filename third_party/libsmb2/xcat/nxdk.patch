@@ -1,0 +1,249 @@
+diff -ruN -x '*.obj' -x '*.d' a/lib/compat.c b/lib/compat.c
+--- a/lib/compat.c	2026-10-29 13:20:09.895090307 +0000
++++ b/lib/compat.c	2026-10-29 13:22:49.106616364 +0000
+@@ -46,6 +46,22 @@
+ 
+ #endif
+ 
++#ifdef NXDK
++#include <errno.h>
++#include <stdlib.h>
++#include <string.h>
++#define login_num ENXIO
++#define getpid_num() 0
++#define smb2_random rand
++#define smb2_srandom srand
++
++int gethostname(char *name, size_t len)
++{
++        strncpy(name, "XBOX", len);
++        return 0;
++}
++#endif
++
+ #ifdef __DREAMCAST__
+ #include <stdlib.h>
+ #include <string.h>
+diff -ruN -x '*.obj' -x '*.d' a/lib/compat.h b/lib/compat.h
+--- a/lib/compat.h	2026-10-29 13:20:09.897728629 +0000
++++ b/lib/compat.h	2026-10-29 13:22:49.106048650 +0000
+@@ -295,6 +295,45 @@
+ 
+ #endif /* _XBOX */
+ 
++#ifdef NXDK
++
++/* nxdk (original Xbox): lwIP's BSD socket API; its macros map socket(),
++ * poll(), readv(), writev(), close() ... to lwip_*(). */
++#include <errno.h>
++#include <stddef.h>
++#include "lwip/netdb.h"
++#include "lwip/sockets.h"
++
++#ifndef SOL_TCP
++#define SOL_TCP IPPROTO_TCP
++#endif
++
++#ifndef EAI_AGAIN
++#define EAI_AGAIN EAGAIN
++#endif
++
++/* open() flags: libsmb2 only maps them to SMB2 create options. */
++#ifndef O_CREAT
++#define O_CREAT 0100
++#endif
++#ifndef O_EXCL
++#define O_EXCL 0200
++#endif
++#ifndef O_TRUNC
++#define O_TRUNC 01000
++#endif
++#ifndef O_DIRECTORY
++#define O_DIRECTORY 0200000
++#endif
++
++int getlogin_r(char *buf, size_t size);
++int gethostname(char *name, size_t len);
++int getpid(void);
++int random(void);
++void srandom(unsigned int seed);
++
++#endif /* NXDK */
++
+ #ifdef PICO_PLATFORM
+ 
+ #include "lwip/netdb.h"
+diff -ruN -x '*.obj' -x '*.d' a/lib/hmac-md5.h b/lib/hmac-md5.h
+--- a/lib/hmac-md5.h	2026-10-29 13:20:09.897774494 +0000
++++ b/lib/hmac-md5.h	2026-10-29 13:22:49.105789035 +0000
+@@ -9,7 +9,9 @@
+ #endif
+ 
+ #include <string.h>
++#ifdef HAVE_SYS_TYPES_H
+ #include <sys/types.h>
++#endif
+ 
+ #ifdef HAVE_STDINT_H
+ #include <stdint.h>
+diff -ruN -x '*.obj' -x '*.d' a/lib/init.c b/lib/init.c
+--- a/lib/init.c	2026-10-29 13:20:09.895291362 +0000
++++ b/lib/init.c	2026-10-29 13:22:49.105242243 +0000
+@@ -338,6 +338,16 @@
+ {
+         uint8_t *p = buf;
+ 
++#ifdef SMB2_RANDOM_BYTES_HOOK
++        {
++                extern int SMB2_RANDOM_BYTES_HOOK(void *buf, size_t len);
++
++                if (SMB2_RANDOM_BYTES_HOOK(buf, len) == 0) {
++                        return 0;
++                }
++        }
++#endif
++
+ #ifdef HAVE_ARC4RANDOM_BUF
+         arc4random_buf(p, len);
+         return 0;
+diff -ruN -x '*.obj' -x '*.d' a/lib/md5.h b/lib/md5.h
+--- a/lib/md5.h	2026-10-29 13:20:09.897901854 +0000
++++ b/lib/md5.h	2026-10-29 13:22:49.105369493 +0000
+@@ -32,7 +32,9 @@
+ #endif
+ 
+ #include <string.h>
++#ifdef HAVE_SYS_TYPES_H
+ #include <sys/types.h>
++#endif
+ 
+ #ifdef HAVE_STDINT_H
+ #include <stdint.h>
+diff -ruN -x '*.obj' -x '*.d' a/lib/socket.c b/lib/socket.c
+--- a/lib/socket.c	2026-10-29 13:20:09.897254034 +0000
++++ b/lib/socket.c	2026-10-29 13:22:49.104251255 +0000
+@@ -274,7 +274,7 @@
+                                 for (i = 0; i < tmp_pdu->out.niov;
+                                      i++, niov++) {
+                                         iov[niov].iov_base = tmp_pdu->out.iov[i].buf;
+-#if defined(_WIN32) || defined(_XBOX)
++#if (defined(_WIN32) && !defined(NXDK)) || defined(_XBOX)
+                                         iov[niov].iov_len = (unsigned long)tmp_pdu->out.iov[i].len;
+ #else
+                                         iov[niov].iov_len = (size_t)tmp_pdu->out.iov[i].len;
+@@ -300,7 +300,7 @@
+ 
+                 /* Adjust the first vector to send */
+                 tmpiov->iov_base = (char *)tmpiov->iov_base + num_done;
+-#if defined(_WIN32) || defined(_XBOX)
++#if (defined(_WIN32) && !defined(NXDK)) || defined(_XBOX)
+                 tmpiov->iov_len -= (unsigned long)num_done;
+ #else
+                 tmpiov->iov_len -= (size_t)num_done;
+@@ -434,7 +434,7 @@
+         niov = smb2->in.niov;
+         for (i = 0; i < niov; i++) {
+                 iov[i].iov_base = smb2->in.iov[i].buf;
+-#if defined(_WIN32) || defined(_XBOX)
++#if (defined(_WIN32) && !defined(NXDK)) || defined(_XBOX)
+                 iov[i].iov_len = (unsigned long)smb2->in.iov[i].len;
+ #else
+                 iov[i].iov_len = (size_t)smb2->in.iov[i].len;
+@@ -464,7 +464,7 @@
+ 
+         /* Adjust the first vector to read */
+         tmpiov->iov_base = (char *)tmpiov->iov_base + num_done;
+-#if defined(_WIN32) || defined(_XBOX)
++#if (defined(_WIN32) && !defined(NXDK)) || defined(_XBOX)
+         tmpiov->iov_len -= (unsigned long)num_done;
+ #else
+         tmpiov->iov_len -= (size_t)num_done;
+@@ -472,7 +472,7 @@
+         /* Read into our trimmed iovectors */
+         count = func(smb2, tmpiov, niov);
+         if (count < 0) {
+-#if defined(_WIN32) || defined(_XBOX)
++#if (defined(_WIN32) && !defined(NXDK)) || defined(_XBOX)
+                 int err = WSAGetLastError();
+                 if (err == WSAEINTR || err == WSAEWOULDBLOCK) {
+ #else
+@@ -625,7 +625,7 @@
+                         do {
+                                 count = func(smb2, &fiov, 1);
+                                 if (count < 0) {
+-#if defined(_WIN32) || defined(_XBOX)
++#if (defined(_WIN32) && !defined(NXDK)) || defined(_XBOX)
+                                         int err = WSAGetLastError();
+                                         if (err == WSAEINTR || err == WSAEWOULDBLOCK) {
+ #else
+@@ -1578,7 +1578,7 @@
+ #endif
+ 
+         if (connect(fd, (struct sockaddr *)&ss, socksize) != 0
+-#if defined(_WIN32) || defined(_MSC_VER)
++#if (defined(_WIN32) || defined(_MSC_VER)) && !defined(NXDK)
+                   && WSAGetLastError() != WSAEWOULDBLOCK) {
+ #else
+                   && errno != EINPROGRESS) {
+@@ -1835,7 +1835,7 @@
+         t_socket fd;
+         socklen_t socksize;
+         struct sockaddr_in serv_addr;
+-#if defined(SO_REUSEADDR) && !defined(_WIN32) && !defined(_MSC_VER)
++#if defined(SO_REUSEADDR) && ((!defined(_WIN32) && !defined(_MSC_VER)) || defined(NXDK))
+         int const yes = 1;
+ #endif
+ 
+@@ -1849,7 +1849,7 @@
+         set_nonblocking(fd);
+         set_tcp_sockopt(fd, TCP_NODELAY, 1);
+ 
+-#if defined(SO_REUSEADDR) && !defined(_WIN32) && !defined(_MSC_VER)
++#if defined(SO_REUSEADDR) && ((!defined(_WIN32) && !defined(_MSC_VER)) || defined(NXDK))
+         /*
+          * Allow binding while an old socket for this port is still sitting
+          * in TIME_WAIT, otherwise stopping and restarting the server fails
+@@ -1869,7 +1869,7 @@
+         socksize = sizeof(serv_addr);
+ 
+         if (bind(fd, (struct sockaddr *)&serv_addr, socksize) != 0
+-#if defined(_WIN32) || defined(_MSC_VER)
++#if (defined(_WIN32) || defined(_MSC_VER)) && !defined(NXDK)
+                   && WSAGetLastError() != WSAEWOULDBLOCK) {
+ #else
+                   && errno != EINPROGRESS) {
+diff -ruN -x '*.obj' -x '*.d' a/include/portable-endian.h b/include/portable-endian.h
+--- a/include/portable-endian.h	2026-10-29 13:20:09.898742271 +0000
++++ b/include/portable-endian.h	2026-10-29 13:22:49.104749318 +0000
+@@ -7,11 +7,29 @@
+ #ifndef PORTABLE_ENDIAN_H__
+ #define PORTABLE_ENDIAN_H__
+ 
+-#if (defined(_WIN16) || defined(_WIN32) || defined(_WIN64)) && !defined(__WINDOWS__) && !defined(_XBOX)
++#if (defined(_WIN16) || defined(_WIN32) || defined(_WIN64)) && !defined(__WINDOWS__) && !defined(_XBOX) && !defined(NXDK)
+ #define __WINDOWS__
+ #endif
+ 
+-#if defined(__PS2__) || defined(PICO_PLATFORM)
++#if defined(NXDK)
++
++/* nxdk (original Xbox): little-endian x86, clang builtins. */
++#define be16toh(x) __builtin_bswap16(x)
++#define htobe16(x) __builtin_bswap16(x)
++#define htole16(x) (x)
++#define le16toh(x) (x)
++
++#define be32toh(x) __builtin_bswap32(x)
++#define htobe32(x) __builtin_bswap32(x)
++#define htole32(x) (x)
++#define le32toh(x) (x)
++
++#define be64toh(x) __builtin_bswap64(x)
++#define htobe64(x) __builtin_bswap64(x)
++#define htole64(x) (x)
++#define le64toh(x) (x)
++
++#elif defined(__PS2__) || defined(PICO_PLATFORM)
+ 
+ #ifndef _LITTLE_ENDIAN
+ #define _LITTLE_ENDIAN LITTLE_ENDIAN
