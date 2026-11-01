@@ -35,6 +35,7 @@
 #include "xcat/http_client.h"
 #include "xcat/install.h"
 #include "xcat/map.h"
+#include "xcat/sevenz.h"
 #include "xcat/sntp.h"
 #include "xcat/version.h"
 #include "xcat/xdvdfs.h"
@@ -65,8 +66,11 @@ static int usage(void)
         "net options: --timeout <ms>, --attempts <n>, --credentials <file>,\n"
         "             --ca-file <pem> (trust these CAs instead of the built-in ones),\n"
         "             --now <unix-seconds> (for tests: the time certificates are checked at)\n"
-        "install options: --md5 <hex>, --sha1 <hex> (the image's expected hashes)\n"
-        "install: a <url|image> ending in .zip installs the zip's image\n",
+        "install options: --md5 <hex>, --sha1 <hex> (the image's expected hashes),\n"
+        "                 --max-dict <MiB> (the largest 7z dictionary to unpack, as on a "
+        "console)\n"
+        "install: a <url|image> ending in .zip or .7z installs the archive's image, or its game "
+        "or app folder\n",
         xc_version_string());
 #ifdef XCAT_SMB
     (void)fprintf(stderr,
@@ -202,6 +206,8 @@ static void title_from_path(const char *path, char *out, size_t size)
     size_t len = strlen(base);
     if (ends_with_ci(base, len, ".zip")) {
         len -= 4;
+    } else if (ends_with_ci(base, len, ".7z")) {
+        len -= 3;
     }
     if (ends_with_ci(base, len, ".iso")) {
         len -= 4;
@@ -515,6 +521,8 @@ typedef struct net_opts {
     unsigned long timeout_ms;
     unsigned long attempts;
     unsigned long checkpoint; /* install only: bytes between checkpoints (ADR 0011), 0 = default */
+    unsigned long
+        max_dict_mib; /* install only: the largest 7z dictionary (sevenz.md §4), 0 = any */
     const char *cred_path;
     const char *ca_path; /* replaces the built-in CA bundle (ADR 0012 §4) */
     bool has_now;        /* tests only: check certificates at this time instead of the clock's */
@@ -546,6 +554,8 @@ static int parse_net_opts(int argc, char **argv, net_opts *o)
         } else if (strcmp(argv[i], "--now") == 0 && !o->has_now) {
             ok = parse_uint(argv[i + 1], 0xFFFFFFFFUL, &o->now);
             o->has_now = true;
+        } else if (strcmp(argv[i], "--max-dict") == 0) {
+            ok = parse_uint(argv[i + 1], 4096UL, &o->max_dict_mib) && o->max_dict_mib > 0;
         } else if (strcmp(argv[i], "--checkpoint") == 0) {
             ok = parse_uint(argv[i + 1], 0x7FFFFFFFUL, &o->checkpoint) && o->checkpoint >= 4096U;
         } else if (strcmp(argv[i], "--md5") == 0 && !o->has_md5) {
@@ -999,6 +1009,9 @@ static bool install_progress(void *ctx, const xc_install_progress *p)
 static int install_fail(const xc_install_result *r, const http_env *env, const char *what,
                         xc_err err)
 {
+    if (r->folder_why[0] != '\0') {
+        (void)fprintf(stderr, "xcat-cli: %s: %s\n", what, r->folder_why);
+    }
     switch (err) {
     case XC_ERR_NOT_INSTALLABLE:
         (void)printf("not installable: %s (%zu problem%s)\n", xc_err_str(err), r->problem_count,
@@ -1017,7 +1030,7 @@ static int install_fail(const xc_install_result *r, const http_env *env, const c
                       mib(r->space_needed), mib(r->space_free));
         return 1;
     case XC_ERR_ZIP_UNSUPPORTED:
-        if (r->zip_member[0] != '\0') {
+        if (r->zip_member[0] != '\0' && r->folder_why[0] == '\0') {
             const char *m = xc_zip_method_name(r->zip_method);
             (void)fprintf(stderr, "xcat-cli: %s: %s in the zip is %s (method %u)\n", what,
                           r->zip_member, m != NULL ? m : "compressed with an unknown method",
@@ -1148,6 +1161,8 @@ static int cmd_install(int argc, char **argv)
     req.progress = install_progress;
     req.progress_ctx = &ui;
     req.zip = xc_zip_is_zip_name(image);
+    req.sevenz = xc_7z_is_7z_name(image);
+    req.max_dict = (size_t)o.max_dict_mib << 20U; /* 0: no bound */
     req.expect_md5 = o.has_md5 ? o.md5 : NULL;
     req.expect_sha1 = o.has_sha1 ? o.sha1 : NULL;
 #ifdef XCAT_SMB
@@ -1176,7 +1191,10 @@ static int cmd_install(int argc, char **argv)
             (void)printf("%zu file%s continued from a checkpoint (%" PRIu64 " bytes kept)\n",
                          r.files_continued, r.files_continued == 1 ? "" : "s", r.bytes_continued);
         }
-        if (req.zip) {
+        if (r.archive_folder) {
+            (void)printf("from the archive's game folder: %s\n",
+                         strcmp(r.zip_member, "/") == 0 ? "its top" : r.zip_member);
+        } else if (req.zip) {
             (void)printf("from the zip: %s, %s", r.zip_member,
                          r.zip_method == 0 ? "stored" : "Deflate");
             if (r.zip_method != 0) {

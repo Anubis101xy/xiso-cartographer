@@ -4,6 +4,7 @@
  * game file survives the power switch (docs/formats/journal.md §2). Spool files for Deflate
  * zips are flushed when the install asks (stream-install.md §7.1).
  */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
@@ -292,4 +293,116 @@ void xc_nx_install_io(xc_install_io *io)
     io->spool_read = io_spool_read;
     io->spool_remove = io_spool_remove;
     io->spool_sync = io_spool_sync;
+}
+
+/* --- deleting an install folder ---------------------------------------------------------- */
+
+#define TREE_PATH 256 /* FATX paths are at most 250 bytes below the drive */
+#define TREE_DEPTH 40
+
+/* The names in folder `path` (without "." and ".."), each followed by a byte that's 1 for a
+   folder, 0 for a file, in one malloc'd buffer; *count of them. Read in full before anything
+   is deleted, so deleting doesn't disturb the listing. */
+static xc_err list_names(const char *path, char **out, size_t *count, size_t *used)
+{
+    char pattern[TREE_PATH + 3];
+    if (snprintf(pattern, sizeof pattern, "%s\\*", path) >= (int)sizeof pattern) {
+        return XC_ERR_LIMIT;
+    }
+    *out = NULL;
+    *count = 0;
+    *used = 0;
+    size_t cap = 0;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        return XC_OK; /* empty, or gone */
+    }
+    xc_err err = XC_OK;
+    do {
+        if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) {
+            continue;
+        }
+        size_t n = strlen(fd.cFileName) + 2U;
+        if (*used + n > cap) {
+            size_t grown = cap == 0 ? 4096U : cap * 2U;
+            while (grown < *used + n) {
+                grown *= 2U;
+            }
+            char *p = realloc(*out, grown);
+            if (p == NULL) {
+                err = XC_ERR_NOMEM;
+                break;
+            }
+            *out = p;
+            cap = grown;
+        }
+        memcpy(*out + *used, fd.cFileName, n - 1U);
+        (*out)[*used + n - 1U] = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
+        *used += n;
+        (*count)++;
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return err;
+}
+
+static xc_err remove_tree(char *path, size_t len, int depth)
+{
+    if (depth > TREE_DEPTH) {
+        return XC_ERR_LIMIT;
+    }
+    char *names = NULL;
+    size_t count = 0;
+    size_t used = 0;
+    xc_err err = list_names(path, &names, &count, &used);
+    xc_err first = err;
+    for (size_t at = 0, i = 0; err == XC_OK && i < count; i++) {
+        const char *name = names + at;
+        size_t n = strlen(name);
+        bool dir = name[n + 1U] == 1;
+        at += n + 2U;
+        if (len + 1U + n >= TREE_PATH) {
+            first = first == XC_OK ? XC_ERR_LIMIT : first;
+            continue;
+        }
+        path[len] = '\\';
+        memcpy(path + len + 1U, name, n + 1U);
+        xc_err e;
+        if (dir) {
+            e = remove_tree(path, len + 1U + n, depth + 1);
+        } else {
+            (void)SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+            e = DeleteFileA(path) ? XC_OK : XC_ERR_IO;
+        }
+        path[len] = '\0';
+        if (e == XC_ERR_NOMEM) {
+            err = e;
+        }
+        if (first == XC_OK) {
+            first = e; /* keep going: delete what can be deleted */
+        }
+    }
+    free(names);
+    if (err != XC_OK) {
+        return err;
+    }
+    (void)SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+    if (!RemoveDirectoryA(path) && first == XC_OK) {
+        first = XC_ERR_IO;
+    }
+    return first;
+}
+
+xc_err xc_nx_remove_tree(const char *path)
+{
+    char buf[TREE_PATH];
+    size_t len = path != NULL ? strlen(path) : 0;
+    if (len < 4 || len >= sizeof buf || path[1] != ':' || path[2] != '\\') {
+        return XC_ERR_INVALID_ARG; /* never a drive root */
+    }
+    memcpy(buf, path, len + 1U);
+    while (len > 3 && buf[len - 1U] == '\\') {
+        buf[--len] = '\0';
+    }
+    return remove_tree(buf, len, 0);
 }

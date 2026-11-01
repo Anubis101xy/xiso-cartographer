@@ -48,12 +48,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             *end = '\0';
         }
         if (line[0] == 'd' && line[1] == ' ') {
-            items[n++] = (xc_fimg_item){line + 2, 0, 0, true};
+            items[n++] = (xc_fimg_item){line + 2, 0, 0, true, 0};
         } else if (line[0] == 'f' && line[1] == ' ') {
             char *rest = NULL;
             unsigned long long sz = strtoull(line + 2, &rest, 10);
             if (rest != NULL && *rest == ' ') {
-                items[n++] = (xc_fimg_item){rest + 1, sz % (1ULL << 33), (uint64_t)n, false};
+                items[n++] = (xc_fimg_item){rest + 1, sz % (1ULL << 33), (uint64_t)n, false, 0};
             }
         }
         line = end != NULL ? end + 1 : NULL;

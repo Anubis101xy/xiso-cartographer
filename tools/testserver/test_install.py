@@ -422,7 +422,7 @@ def s_zip_refused(e: Env) -> None:
         z.writestr("b.iso", b"b")
     r = e.run(e.url(name="two.zip"), "Two")
     e.expect(r.returncode == 1, f"two images: exit {r.returncode}")
-    e.expect("exactly one .iso or .xiso image" in r.stderr, "two images: no reason given")
+    e.expect("one .iso or .xiso image" in r.stderr, "two images: no reason given")
 
     lzma = os.path.join(e.served, "lzma.zip")
     with zipfile.ZipFile(lzma, "w") as z:

@@ -36,6 +36,7 @@ static const char *const screens[] = {
     "keyboard-nas-user",
     "keyboard-nas-password",
     "ask-nas-use",
+    "ask-delete",
 };
 
 bool ui_script_screen_known(const char *name)

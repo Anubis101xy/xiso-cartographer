@@ -25,6 +25,7 @@ SRCS = $(CURDIR)/main.c \
        $(CORE_DIR)/src/http.c \
        $(CORE_DIR)/src/http_client.c \
        $(CORE_DIR)/src/install.c \
+       $(CORE_DIR)/src/arc_folder.c \
        $(CORE_DIR)/src/folder_image.c \
        $(CORE_DIR)/src/installed.c \
        $(CORE_DIR)/src/journal.c \
@@ -54,6 +55,7 @@ include $(CURDIR)/tls.mk
 
 # Zip archives (ADR 0009): core/src/install.c installs their images.
 include $(CURDIR)/zip.mk
+include $(CURDIR)/sevenz.mk
 
 # NAS shared folders over SMB (ADR 0018): libsmb2, the SMB client and the NAS scan.
 include $(CURDIR)/smb.mk

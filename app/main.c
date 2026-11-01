@@ -57,6 +57,7 @@
 #include "xcat/map_edit.h"
 #include "xcat/nxdk.h"
 #include "xcat/settings.h"
+#include "xcat/sevenz.h"
 #include "xcat/smb.h"
 #include "xcat/smb_client.h"
 #include "xcat/smb_scan.h"
@@ -69,6 +70,7 @@
 #define ISO_DIR XCAT_DIR "\\isos"
 #define LOG_FILE XCAT_DIR "\\install.log"
 #define APPS_DIR "E:\\Apps\\xcat"
+#define APPS_ROOT "E:\\Apps" /* where apps install (ui_library_to_apps) */
 #define CRED_FILE APPS_DIR "\\credentials"
 #define CATALOG_FILE "E:\\Apps\\xcat\\catalog.bin"
 #define SETTINGS_FILE APPS_DIR "\\settings"
@@ -322,11 +324,14 @@ static DWORD WINAPI install_screen(LPVOID arg)
     return 0;
 }
 
+/* Where the next install goes: settings.install_dir, or APPS_ROOT for an app. */
+static const char *dest_dir;
+
 /* Puts the install screen up for `name`, drawn and read by its thread until install_done. */
 static void install_start(const char *name)
 {
     ui_install_open(&view, name);
-    view.dir = settings.install_dir;
+    view.dir = dest_dir != NULL ? dest_dir : settings.install_dir;
     stop_asked = false;
     combo_held = false;
     screen_quit = false;
@@ -1189,6 +1194,36 @@ static int hexval(char c)
 }
 
 /* "dir/Halo%20(USA).xiso.iso?x" -> "Halo (USA)"; likewise "Halo (USA).zip" */
+/* True if a source's path has a folder named like where apps are kept ("Apps",
+   "Applications", "Homebrew", "Emulators", "Dashboards", any case): installing it offers
+   E:\\Apps first. */
+static bool looks_like_app(const char *source)
+{
+    static const char *const names[] = {"apps", "applications", "homebrew", "emulators",
+                                        "dashboards"};
+    for (const char *p = source; *p != '\0'; p++) {
+        if (*p != '/' && *p != '\\') {
+            continue;
+        }
+        const char *name = p + 1;
+        size_t n = strcspn(name, "/\\");
+        if (name[n] == '\0') {
+            break; /* the file itself */
+        }
+        for (size_t k = 0; k < sizeof names / sizeof names[0]; k++) {
+            size_t m = strlen(names[k]);
+            bool same = n == m;
+            for (size_t c = 0; same && c < m; c++) {
+                same = (name[c] | 0x20) == names[k][c];
+            }
+            if (same) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static void title_from(const char *name, char *out_title, size_t size)
 {
     const char *end = name + strcspn(name, "?#");
@@ -1208,6 +1243,8 @@ static void title_from(const char *name, char *out_title, size_t size)
     }
     if (ends_with_ci(out_title, n, ".zip")) {
         n -= 4;
+    } else if (ends_with_ci(out_title, n, ".7z")) {
+        n -= 3;
     }
     if (ends_with_ci(out_title, n, ".iso")) {
         n -= 4;
@@ -1331,10 +1368,19 @@ static void log_image_hash(const xc_install_result *r)
 }
 
 /* ADR 0009 amendment 1: how a zip install went, and what a Deflate one cost. */
-static void log_zip(const xc_install_result *r)
+static void log_zip(const xc_install_result *r, bool sevenz)
 {
-    out("  from the zip: %s, %s\n", r->zip_member, r->zip_method == 0 ? "stored" : "Deflate");
-    if (r->zip_method == 0) {
+    if (r->archive_folder) {
+        out("  from the archive's game folder: %s\n",
+            strcmp(r->zip_member, "/") == 0 ? "its top" : r->zip_member);
+        return;
+    }
+    if (sevenz) {
+        out("  from the 7z: %s%s\n", r->zip_member, r->passes == 0 ? ", stored" : "");
+    } else {
+        out("  from the zip: %s, %s\n", r->zip_member, r->zip_method == 0 ? "stored" : "Deflate");
+    }
+    if (r->passes == 0) {
         return;
     }
     out("  %u pass%s, %llu MiB read again, %u file(s) from a %llu MiB spool\n", r->passes,
@@ -1440,6 +1486,27 @@ static void refused(void)
 /* Installs one image; true if it ended installed and verified. `listing` is the map entry
    when an archive.org listing describes the file (archiveorg.md §8), else NULL. `release`
    is the catalog's release for it, or XC_CATALOG_NONE. */
+/* sevenz.md §4: the largest LZMA dictionary a 7z may need on this console now: the largest
+   block the heap gives, found by halving, less 4 MiB for the install's buffers and the network.
+   Never 0, which would mean no bound. */
+static size_t free_for_dictionary(void)
+{
+    size_t lo = 0;
+    size_t hi = (size_t)96 << 20;
+    while (hi - lo > ((size_t)1 << 20)) {
+        size_t mid = lo + (hi - lo) / 2U;
+        void *p = malloc(mid);
+        if (p != NULL) {
+            free(p);
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    size_t margin = (size_t)4 << 20;
+    return lo > margin ? lo - margin : 1U;
+}
+
 /* game_folder: src is a game folder's image (folder-image.md), with no image hashes. */
 static bool install(const xc_source *src, const char *name, const char *etag,
                     const char *last_modified, const xc_map_entry *listing, size_t release,
@@ -1459,13 +1526,14 @@ static bool install(const xc_source *src, const char *name, const char *etag,
     req.etag = etag;
     req.last_modified = last_modified;
     req.source_name = name;
-    req.games_dir = settings.install_dir;
-    req.games_dir_len = strlen(settings.install_dir) - 2U; /* without "E:" */
+    const char *games_dir = dest_dir != NULL ? dest_dir : settings.install_dir;
+    req.games_dir = games_dir;
+    req.games_dir_len = strlen(games_dir) - 2U; /* without "E:" */
     req.title = title;
     req.io = &io;
     req.buf = io_buf;
     req.buf_size = IO_BUF_SIZE;
-    char root[4] = {settings.install_dir[0], ':', '\\', '\0'};
+    char root[4] = {games_dir[0], ':', '\\', '\0'};
     req.cluster_size = xc_nx_cluster_size(root);
     if (req.cluster_size == 0) {
         req.cluster_size = CLUSTER;
@@ -1473,6 +1541,11 @@ static bool install(const xc_source *src, const char *name, const char *etag,
     req.progress = on_progress;
     req.progress_ctx = &u;
     req.zip = xc_zip_is_zip_name(name);
+    req.sevenz = xc_7z_is_7z_name(name);
+    if (req.sevenz) {
+        req.max_dict = free_for_dictionary();
+        out("  7z: room for a %llu MiB dictionary\n", (unsigned long long)(req.max_dict >> 20U));
+    }
     req.no_hash = game_folder;
     if (listing != NULL && listing->name != NULL && !game_folder) {
         req.expect_size = listing->size;
@@ -1507,8 +1580,8 @@ static bool install(const xc_source *src, const char *name, const char *etag,
                 (unsigned)result.files_continued,
                 (unsigned long long)(result.bytes_continued >> 20U));
         }
-        if (req.zip) {
-            log_zip(&result);
+        if (req.zip || req.sevenz) {
+            log_zip(&result, req.sevenz);
         }
         log_image_hash(&result);
         if (result.has_title_id) {
@@ -1531,7 +1604,9 @@ static bool install(const xc_source *src, const char *name, const char *etag,
         detail("archive.org's listing says %llu bytes; the server's file has %llu",
                (unsigned long long)req.expect_size, (unsigned long long)src->size);
     }
-    if (err == XC_ERR_ZIP_UNSUPPORTED && result.zip_method != 0 && result.zip_method != 8) {
+    if (result.folder_why[0] != '\0') {
+        detail("In the archive: %s", result.folder_why);
+    } else if (err == XC_ERR_ZIP_UNSUPPORTED && result.zip_method != 0 && result.zip_method != 8) {
         const char *method = xc_zip_method_name(result.zip_method);
         detail("%s in the zip uses %s (method %u); only stored and Deflate can be read",
                result.zip_member[0] != '\0' ? result.zip_member : "the image",
@@ -1734,7 +1809,7 @@ static void seed_samples(void)
 /* The images and zips in E:\xcat\isos. */
 static int list_local(char names[MAX_LOCAL][XC_NX_PATH_MAX])
 {
-    static const char *const patterns[] = {ISO_DIR "\\*.iso", ISO_DIR "\\*.zip"};
+    static const char *const patterns[] = {ISO_DIR "\\*.iso", ISO_DIR "\\*.zip", ISO_DIR "\\*.7z"};
     int count = 0;
     for (size_t k = 0; k < sizeof patterns / sizeof patterns[0]; k++) {
         WIN32_FIND_DATAA fd;
@@ -1763,6 +1838,7 @@ typedef struct game {
     char about[512];                     /* who made it, the release, where it comes from */
     char note[400];                      /* what the last install attempt in this run came to */
     char installed[XC_INSTALL_MAX_PATH]; /* its folder, if it's installed; "" if not */
+    char partial[XC_INSTALL_MAX_PATH];   /* the folder of an install that isn't finished, or "" */
     uint64_t size;                       /* from the listing; 0 if unknown */
     const xc_map_entry *entry;           /* a map entry, or */
     const char *path;                    /* a file in E:\xcat\isos */
@@ -1915,6 +1991,7 @@ static game *list_games(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlo
 #define MAX_FOUND 256
 
 typedef struct found {
+    const char *root; /* settings.install_dir, or APPS_ROOT */
     char folder[XC_FATX_MAX_NAME + 1];
     xc_installed in;
     char facts[64];                                         /* size, files */
@@ -1956,7 +2033,7 @@ static void origin_text(const char *image, char *out_text, size_t size)
 static void describe_found(found *f, ui_lib_item *item)
 {
     const xc_marker *m = &f->in.marker;
-    snprintf(f->note, sizeof f->note, "%s\\%s", settings.install_dir, f->folder);
+    snprintf(f->note, sizeof f->note, "%s\\%s", f->root, f->folder);
     f->facts[0] = '\0';
     if (f->in.state == XC_FOLDER_UNFINISHED) {
         snprintf(f->about, sizeof f->about, "%s",
@@ -1989,21 +2066,18 @@ static void describe_found(found *f, ui_lib_item *item)
                                                            : "",
                  from);
     }
-    *item = (ui_lib_item){f->folder, f->facts, f->about,
-                          f->in.state == XC_FOLDER_INSTALLED ? UI_LIB_INSTALLED : UI_LIB_UNFINISHED,
-                          f->note};
+    *item = (ui_lib_item){
+        f->folder, f->facts,
+        f->about,  f->in.state == XC_FOLDER_INSTALLED ? UI_LIB_INSTALLED : UI_LIB_UNFINISHED,
+        f->note,   strcmp(f->root, APPS_ROOT) == 0};
 }
 
-/* Lists the finished and unfinished installs in the install folder; other folders are left
-   out. */
-static void scan_games(void)
+/* Adds the finished and unfinished installs in `root` to founds; other folders are left out. */
+static void scan_root(const xc_install_io *io, const char *root)
 {
-    xc_install_io io;
-    xc_nx_install_io(&io);
-    found_count = 0;
     WIN32_FIND_DATAA fd;
     char pattern[XC_SETTINGS_DIR_SIZE + 2];
-    snprintf(pattern, sizeof pattern, "%s\\*", settings.install_dir);
+    snprintf(pattern, sizeof pattern, "%s\\*", root);
     HANDLE h = founds != NULL ? FindFirstFileA(pattern, &fd) : INVALID_HANDLE_VALUE;
     if (h == INVALID_HANDLE_VALUE) {
         return;
@@ -2014,18 +2088,36 @@ static void scan_games(void)
             continue;
         }
         if (found_count == MAX_FOUND) {
-            out("More than %d games in %s: the rest aren't listed\n", MAX_FOUND,
-                settings.install_dir);
+            out("More than %d installs: the rest of %s isn't listed\n", MAX_FOUND, root);
             break;
         }
         found *f = &founds[found_count];
+        f->root = root;
         snprintf(f->folder, sizeof f->folder, "%s", fd.cFileName);
-        if (xc_installed_check(&io, settings.install_dir, f->folder, &f->in) == XC_OK &&
+        if (xc_installed_check(io, root, f->folder, &f->in) == XC_OK &&
             f->in.state != XC_FOLDER_OTHER) {
             found_count++;
         }
     } while (FindNextFileA(h, &fd));
     FindClose(h);
+}
+
+/* Lists the finished and unfinished installs in the install folder and in E:\\Apps (apps
+   this app installed; the others there, this app included, have no marker or journal). */
+static void scan_games(void)
+{
+    xc_install_io io;
+    xc_nx_install_io(&io);
+    found_count = 0;
+    scan_root(&io, settings.install_dir);
+    bool same = true;
+    for (const char *a = settings.install_dir, *b = APPS_ROOT; same && (*a != '\0' || *b != '\0');
+         a++, b++) {
+        same = (*a | 0x20) == (*b | 0x20);
+    }
+    if (!same) {
+        scan_root(&io, APPS_ROOT);
+    }
     qsort(founds, (size_t)found_count, sizeof *founds, by_folder);
     for (int i = 0; i < found_count; i++) {
         describe_found(&founds[i], &found_items[i]);
@@ -2059,19 +2151,21 @@ static void mark_games(game *games, ui_lib_item *items, int count)
             continue;
         }
         snprintf(games[i].note, sizeof games[i].note, "%s%s\\%s",
-                 done != NULL ? "In " : "Started in an earlier visit, in ", settings.install_dir,
-                 f->folder);
+                 done != NULL ? "In " : "Started in an earlier visit, in ", f->root, f->folder);
         if (done != NULL) {
-            snprintf(games[i].installed, sizeof games[i].installed, "%s\\%s", settings.install_dir,
-                     f->folder);
+            snprintf(games[i].installed, sizeof games[i].installed, "%s\\%s", f->root, f->folder);
+        } else {
+            snprintf(games[i].partial, sizeof games[i].partial, "%s\\%s", f->root, f->folder);
         }
+        items[i].app = items[i].app || strcmp(f->root, APPS_ROOT) == 0;
         items[i].state = done != NULL ? UI_LIB_INSTALLED : UI_LIB_UNFINISHED;
         items[i].note = games[i].note;
         installed += done != NULL;
         unfinished += done == NULL;
     }
-    out("%s: %d folder(s) from this app; of the games listed, %d installed and %d unfinished\n",
-        settings.install_dir, found_count, installed, unfinished);
+    out("%s and %s: %d folder(s) from this app; of the games listed, %d installed and %d "
+        "unfinished\n",
+        settings.install_dir, APPS_ROOT, found_count, installed, unfinished);
 }
 
 /* Installs g on the install screen until it's installed, or the user goes back: RETRY tries
@@ -2089,6 +2183,9 @@ static bool run_install(game *g, ui_lib_item *item)
         out("%s\n", ok ? "Installed and verified." : "Not installed.");
         if (ok) {
             snprintf(g->installed, sizeof g->installed, "%s", result.folder);
+            g->partial[0] = '\0';
+        } else if (result.folder[0] != '\0' && xc_nx_exists(result.folder)) {
+            snprintf(g->partial, sizeof g->partial, "%s", result.folder);
         }
         snprintf(g->note, sizeof g->note, "%s", why);
         item->state = ok                            ? UI_LIB_INSTALLED
@@ -2132,11 +2229,115 @@ static bool run_install(game *g, ui_lib_item *item)
 
 /* Installs games[i] from the library, then marks the library with how it went. True if it
    waits for a login (run_install). */
-static bool install_game(ui_library *lib, game *games, ui_lib_item *items, int i, char *status,
-                         size_t size)
+static bool same_ci(const char *a, const char *b);
+
+/* UI_LIB_DELETE: deletes the highlighted install's folder (INSTALLED), or what an unfinished
+   install of the highlighted game left (GAMES). Only a folder this app made (a marker or a
+   journal in it) in the install folder or E:\\Apps is ever deleted. */
+static void delete_game(ui_library *lib, game *games, ui_lib_item *items, int count)
+{
+    char path[XC_INSTALL_MAX_PATH] = "";
+    const char *name = "";
+    if (lib->section == UI_LIB_INSTALLED_GAMES && found_count > 0) {
+        const found *f = &founds[ui_library_installed(lib)];
+        snprintf(path, sizeof path, "%s\\%s", f->root, f->folder);
+        name = f->folder;
+    } else if (lib->section == UI_LIB_GAMES && ui_library_game(lib) >= 0) {
+        const game *g = &games[ui_library_game(lib)];
+        snprintf(path, sizeof path, "%s", g->partial[0] != '\0' ? g->partial : g->installed);
+        name = g->name;
+    }
+    /* Ours, and in one of the two folders installs go to. */
+    const char *slash = strrchr(path, '\\');
+    size_t root_len = slash != NULL ? (size_t)(slash - path) : 0;
+    char root[XC_SETTINGS_DIR_SIZE + 2] = "";
+    if (root_len > 0 && root_len < sizeof root) {
+        memcpy(root, path, root_len);
+        root[root_len] = '\0';
+    }
+    bool ours = false;
+    if (slash != NULL && slash[1] != '\0' &&
+        (same_ci(root, settings.install_dir) || same_ci(root, APPS_ROOT))) {
+        xc_install_io io;
+        xc_nx_install_io(&io);
+        xc_installed in;
+        ours =
+            xc_installed_check(&io, root, slash + 1, &in) == XC_OK && in.state != XC_FOLDER_OTHER;
+    }
+    if (!ours) {
+        char msg[sizeof path + 96];
+        snprintf(msg, sizeof msg, "%s",
+                 path[0] == '\0' ? "There's nothing on the hard disk to delete for it."
+                                 : "That folder isn't one this app installed, so it's left alone.");
+        out("Not deleted: \"%s\" (%s)\n", path, path[0] == '\0' ? "nothing there" : "not ours");
+        ui_library_tell(lib, "NOT DELETED", msg);
+        return;
+    }
+    char line[XC_INSTALL_MAX_PATH + 16];
+    snprintf(line, sizeof line, "Deleting %s...", path);
+    ui_sdl_begin(ui_col_bg);
+    ui_library_draw(&screen, lib, pan_now, line);
+    ui_sdl_present();
+    xc_err err = xc_nx_remove_tree(path);
+    out("Delete %s: %s\n", path, err == XC_OK ? "done" : xc_err_str(err));
+    /* What's on the disk now, for every game. */
+    for (int i = 0; i < count; i++) {
+        if (items[i].state == UI_LIB_INSTALLED || items[i].state == UI_LIB_UNFINISHED ||
+            ((items[i].state == UI_LIB_FAILED || items[i].state == UI_LIB_STOPPED) &&
+             same_ci(games[i].partial, path))) {
+            items[i].state = UI_LIB_NOT_TRIED;
+            items[i].note = NULL;
+        }
+        if (same_ci(games[i].partial, path)) {
+            games[i].partial[0] = '\0';
+        }
+        if (same_ci(games[i].installed, path)) {
+            games[i].installed[0] = '\0';
+        }
+        if (items[i].state == UI_LIB_NOT_TRIED) {
+            games[i].partial[0] = '\0';
+            games[i].installed[0] = '\0';
+        }
+    }
+    scan_games();
+    mark_games(games, items, count);
+    ui_library_set_installed(lib, found_items, found_count);
+    char msg[sizeof path + 160];
+    if (err == XC_OK) {
+        snprintf(msg, sizeof msg, "%s is deleted: %s is gone.", name, path);
+    } else {
+        snprintf(msg, sizeof msg,
+                 "%s couldn't all be deleted (%s). What could be is gone; try again, or delete "
+                 "the rest over FTP.",
+                 path, xc_err_str(err));
+    }
+    ui_library_tell(lib, err == XC_OK ? "DELETED" : "NOT ALL DELETED", msg);
+}
+
+/* The folder an install of g goes to: where an unfinished one carries on, else E:\\Apps for an
+   app, else the install folder. */
+static const char *dest_for(const game *g, bool to_apps)
+{
+    const char *where = g->partial[0] != '\0' ? g->partial : g->installed;
+    size_t n = strlen(APPS_ROOT);
+    if (where[0] != '\0') {
+        bool in_apps = strncmp(where, APPS_ROOT "\\", n + 1U) == 0;
+        return in_apps ? APPS_ROOT : settings.install_dir;
+    }
+    return to_apps ? APPS_ROOT : settings.install_dir;
+}
+
+static bool install_game(ui_library *lib, game *games, ui_lib_item *items, int i, bool to_apps,
+                         char *status, size_t size)
 {
     game *g = &games[i];
+    dest_dir = dest_for(g, to_apps);
+    if (dest_dir != settings.install_dir && !xc_nx_mkdirs(dest_dir)) {
+        out("Could not create %s\n", dest_dir);
+    }
+    out("Installing to %s\n", dest_dir);
     bool login_wanted = run_install(g, &items[i]);
+    dest_dir = NULL;
     scan_games();
     ui_library_set_installed(lib, found_items, found_count);
     ui_lib_state st = items[i].state;
@@ -2360,8 +2561,9 @@ static bool build_list(game **out_games, ui_lib_item **out_items, int *out_count
         return false;
     }
     for (int i = 0; i < count; i++) {
-        items[i] =
-            (ui_lib_item){games[i].name, games[i].facts, games[i].about, UI_LIB_NOT_TRIED, NULL};
+        const char *src = games[i].entry != NULL ? games[i].entry->url : games[i].path;
+        items[i] = (ui_lib_item){games[i].name,    games[i].facts, games[i].about,
+                                 UI_LIB_NOT_TRIED, NULL,           looks_like_app(src)};
     }
     mark_games(games, items, count);
     *out_games = games;
@@ -2481,8 +2683,8 @@ static void play(ui_library *lib, const game *games)
     if (lib->section == UI_LIB_GAMES && ui_library_game(lib) >= 0) {
         snprintf(folder, sizeof folder, "%s", games[ui_library_game(lib)].installed);
     } else if (lib->section == UI_LIB_INSTALLED_GAMES && found_count > 0) {
-        snprintf(folder, sizeof folder, "%s\\%s", settings.install_dir,
-                 founds[ui_library_installed(lib)].folder);
+        const found *f = &founds[ui_library_installed(lib)];
+        snprintf(folder, sizeof folder, "%s\\%s", f->root, f->folder);
     }
     char xbe[XC_INSTALL_MAX_PATH + 16];
     snprintf(xbe, sizeof xbe, "%s\\default.xbe", folder);
@@ -3263,6 +3465,8 @@ static void library(game *games, ui_lib_item *items, int count)
                 change_folder(&lib, games, items, count);
             } else if (a == UI_LIB_PLAY) {
                 play(&lib, games);
+            } else if (a == UI_LIB_DELETE) {
+                delete_game(&lib, games, items, count);
             } else if (a == UI_LIB_NAS_PAGE) {
                 nas_page(&lib);
             } else if (a == UI_LIB_NAS_SCAN) {
@@ -3296,8 +3500,8 @@ static void library(game *games, ui_lib_item *items, int count)
             } else if (resume >= 0 && lib.typing_for == UI_LIB_TYPING_NONE) {
                 resume = -1; /* the keyboard was cancelled: nothing carries on */
             }
-            if (install_now >= 0 &&
-                install_game(&lib, games, items, install_now, status, sizeof status)) {
+            if (install_now >= 0 && install_game(&lib, games, items, install_now,
+                                                 ui_library_to_apps(&lib), status, sizeof status)) {
                 resume = install_now;
                 ui_library_login(&lib);
             }

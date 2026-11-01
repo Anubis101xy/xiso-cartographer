@@ -127,6 +127,24 @@ xc_err xc_zip_checkpoint_position(const uint8_t *blob, size_t len, const xc_zip_
 /* The length of a checkpoint for a member with this method (0 for unsupported methods). */
 size_t xc_zip_checkpoint_size(uint16_t method);
 
+/* --- a game or app folder in a zip (docs/formats/folder-image.md §7) ----------------- */
+
+typedef struct xc_zip_folder xc_zip_folder;
+
+/*
+ * The zip's game or app folder as one image (`image`), for a zip with no image of its own:
+ * the folder of its shallowest default.xbe and what's in it (xcat/arc_folder.h). Stored and
+ * Deflate members; each is inflated as the install reads it, and its CRC-32 checked once read
+ * to its end. `src` and `listing` must outlive the folder. XC_ERR_ZIP_MEMBER (no default.xbe),
+ * XC_ERR_GAME_FOLDER (`why` says what), XC_ERR_ZIP_UNSUPPORTED (a member's method or
+ * encryption, named in `why`), XC_ERR_NOMEM.
+ */
+xc_err xc_zip_folder_open(const xc_source *src, const xc_zip_listing *listing, xc_zip_folder **out,
+                          xc_source *image, char *why, size_t why_cap);
+void xc_zip_folder_close(xc_zip_folder *z);
+/* The folder's details (root, files, validator). */
+const struct xc_arc_folder *xc_zip_folder_arc(const xc_zip_folder *z);
+
 #ifdef __cplusplus
 }
 #endif

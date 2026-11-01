@@ -112,17 +112,17 @@ static void check_listing(const xc_fimg_item *items, size_t n)
 }
 
 static const xc_fimg_item game[] = {
-    {"media/intro.xmv", 70000, 5, false},
-    {"default.xbe", 5000, 1, false},
-    {"media", 0, 0, true},
-    {"media/empty", 0, 0, true},
-    {"media/zero.bin", 0, 2, false},
-    {"Media2", 0, 0, true},
-    {"Media2/sub", 0, 0, true},
-    {"Media2/sub/deep.dat", 2048, 3, false},
-    {"a", 1, 4, false},
-    {"B", 2049, 4, false},
-    {"c d (e) [f] é.txt", 12, 4, false},
+    {"media/intro.xmv", 70000, 5, false, 0},
+    {"default.xbe", 5000, 1, false, 0},
+    {"media", 0, 0, true, 0},
+    {"media/empty", 0, 0, true, 0},
+    {"media/zero.bin", 0, 2, false, 0},
+    {"Media2", 0, 0, true, 0},
+    {"Media2/sub", 0, 0, true, 0},
+    {"Media2/sub/deep.dat", 2048, 3, false, 0},
+    {"a", 1, 4, false, 0},
+    {"B", 2049, 4, false, 0},
+    {"c d (e) [f] é.txt", 12, 4, false, 0},
 };
 #define GAME_N (sizeof game / sizeof game[0])
 
@@ -212,7 +212,7 @@ static void test_empty(void)
     TEST_ASSERT_EQUAL(XC_OK, build(NULL, 0));
     check_listing(NULL, 0);
     TEST_ASSERT_EQUAL_UINT64(33U * 2048U, src.size);
-    static const xc_fimg_item dirs[] = {{"x", 0, 0, true}, {"x/y", 0, 0, true}};
+    static const xc_fimg_item dirs[] = {{"x", 0, 0, true, 0}, {"x/y", 0, 0, true, 0}};
     TEST_ASSERT_EQUAL(XC_OK, build(dirs, 2));
     check_listing(dirs, 2);
 }
@@ -223,11 +223,11 @@ static void test_big_folder(void)
     enum { N = 3000 };
     static char names[N][64];
     static xc_fimg_item items[N + 1];
-    items[0] = (xc_fimg_item){"d", 0, 0, true};
+    items[0] = (xc_fimg_item){"d", 0, 0, true, 0};
     for (size_t i = 0; i < N; i++) {
         (void)snprintf(names[i], sizeof names[i], "d/file %04zu with a longish name.bin",
                        (size_t)((i * 7919U) % N));
-        items[i + 1] = (xc_fimg_item){names[i], i % 5U, 0, false};
+        items[i + 1] = (xc_fimg_item){names[i], i % 5U, 0, false, 0};
     }
     TEST_ASSERT_EQUAL(XC_OK, build(items, N + 1));
     check_listing(items, N + 1);
@@ -244,7 +244,7 @@ static void test_folder_too_big(void)
         (void)snprintf(names[i], 8, "%04zu", i);
         names[i][4] = 'n';
         names[i][255] = '\0';
-        items[i] = (xc_fimg_item){names[i], 0, 0, false};
+        items[i] = (xc_fimg_item){names[i], 0, 0, false, 0};
     }
     TEST_ASSERT_EQUAL(XC_OK, build(items, 880)); /* 7 entries of 272 bytes a sector: fits */
     check_listing(items, 880);
@@ -256,20 +256,22 @@ static void test_folder_too_big(void)
 static void test_case_clash(void)
 {
     static const xc_fimg_item items[] = {
-        {"Media", 0, 0, true}, {"x", 1, 0, false}, {"media", 3, 0, false}};
+        {"Media", 0, 0, true, 0}, {"x", 1, 0, false, 0}, {"media", 3, 0, false, 0}};
     TEST_ASSERT_EQUAL(XC_ERR_GAME_FOLDER, build(items, 3));
     TEST_ASSERT_TRUE(why.item == 0 || why.item == 2);
     TEST_ASSERT_NOT_NULL(strstr(why.why, "upper and lower case"));
     /* The same names in different folders are fine. */
-    static const xc_fimg_item ok[] = {
-        {"a", 0, 0, true}, {"b", 0, 0, true}, {"a/X.bin", 1, 0, false}, {"b/x.bin", 1, 0, false}};
+    static const xc_fimg_item ok[] = {{"a", 0, 0, true, 0},
+                                      {"b", 0, 0, true, 0},
+                                      {"a/X.bin", 1, 0, false, 0},
+                                      {"b/x.bin", 1, 0, false, 0}};
     TEST_ASSERT_EQUAL(XC_OK, build(ok, 4));
     check_listing(ok, 4);
 }
 
 static void expect_refused(const char *path, bool dir, uint64_t size, xc_err err)
 {
-    xc_fimg_item items[2] = {{"ok", 0, 0, true}, {path, size, 0, dir}};
+    xc_fimg_item items[2] = {{"ok", 0, 0, true, 0}, {path, size, 0, dir, 0}};
     TEST_ASSERT_EQUAL_MESSAGE(err, build(items, 2), path);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(1, why.item, path);
 }
@@ -288,12 +290,12 @@ static void test_bad_names(void)
     memset(long_name, 'x', 256);
     expect_refused(long_name, false, 1, XC_ERR_GAME_FOLDER);
     long_name[255] = '\0';
-    xc_fimg_item fine[1] = {{long_name, 1, 0, false}};
+    xc_fimg_item fine[1] = {{long_name, 1, 0, false, 0}};
     TEST_ASSERT_EQUAL(XC_OK, build(fine, 1));
     check_listing(fine, 1);
     /* 4 GiB - 1 is the largest file; it's never read here. */
     expect_refused("huge", false, (uint64_t)UINT32_MAX + 1U, XC_ERR_GAME_FOLDER);
-    xc_fimg_item big[1] = {{"big", UINT32_MAX, 0, false}};
+    xc_fimg_item big[1] = {{"big", UINT32_MAX, 0, false, 0}};
     TEST_ASSERT_EQUAL(XC_OK, build(big, 1));
     TEST_ASSERT_TRUE(src.size > UINT32_MAX);
     xc_xdvdfs_volume vol;
@@ -308,11 +310,11 @@ static void test_bad_names(void)
 static void test_structure(void)
 {
     expect_refused("missing/a", false, 1, XC_ERR_INVALID_ARG); /* its folder isn't listed */
-    static const xc_fimg_item under_file[] = {{"f", 1, 0, false}, {"f/a", 1, 0, false}};
+    static const xc_fimg_item under_file[] = {{"f", 1, 0, false, 0}, {"f/a", 1, 0, false, 0}};
     TEST_ASSERT_EQUAL(XC_ERR_INVALID_ARG, build(under_file, 2));
-    static const xc_fimg_item twice[] = {{"f", 1, 0, false}, {"f", 1, 0, false}};
+    static const xc_fimg_item twice[] = {{"f", 1, 0, false, 0}, {"f", 1, 0, false, 0}};
     TEST_ASSERT_EQUAL(XC_ERR_INVALID_ARG, build(twice, 2));
-    static const xc_fimg_item no_path[] = {{NULL, 1, 0, false}};
+    static const xc_fimg_item no_path[] = {{NULL, 1, 0, false, 0}};
     TEST_ASSERT_EQUAL(XC_ERR_INVALID_ARG, build(no_path, 1));
     TEST_ASSERT_EQUAL(XC_ERR_INVALID_ARG, xc_fimg_build(NULL, 1, read_item, &rd, &img, &src, NULL));
     TEST_ASSERT_EQUAL(XC_ERR_INVALID_ARG, xc_fimg_build(game, 1, NULL, &rd, &img, &src, NULL));
@@ -327,7 +329,7 @@ static void test_depth(void)
         for (size_t j = 0; j <= i; j++) {
             n += (size_t)snprintf(paths[i] + n, sizeof paths[i] - n, j == 0 ? "d" : "/d");
         }
-        items[i] = (xc_fimg_item){paths[i], 0, 0, true};
+        items[i] = (xc_fimg_item){paths[i], 0, 0, true, 0};
     }
     TEST_ASSERT_EQUAL(XC_OK, build(items, 32));
     check_listing(items, 32);
@@ -360,6 +362,28 @@ static void test_validator(void)
     TEST_ASSERT_EQUAL_STRING(first, xc_fimg_validator(img));
 }
 
+/* §4: `order` lays the files' data out, then path order breaks ties. */
+static void test_data_order(void)
+{
+    static const xc_fimg_item items[] = {
+        {"a.bin", 3000, 0, false, 2}, {"b.bin", 10, 0, false, 0}, {"d", 0, 0, true, 0},
+        {"d/c.bin", 5, 0, false, 1},  {"e.bin", 7, 0, false, 1},
+    };
+    TEST_ASSERT_EQUAL(XC_OK, build(items, 5));
+    check_listing(items, 5);
+    xc_xdvdfs_volume vol;
+    xc_xdvdfs_listing l;
+    memset(&l, 0, sizeof l);
+    TEST_ASSERT_EQUAL(XC_OK, xc_xdvdfs_open(&src, &vol));
+    TEST_ASSERT_EQUAL(XC_OK, xc_xdvdfs_list(&src, &vol, NULL, &l));
+    /* The reader lists files by offset: b (0), d/c and e (1, by path), a (2). */
+    TEST_ASSERT_EQUAL_STRING("b.bin", l.files[0].path);
+    TEST_ASSERT_EQUAL_STRING("d/c.bin", l.files[1].path);
+    TEST_ASSERT_EQUAL_STRING("e.bin", l.files[2].path);
+    TEST_ASSERT_EQUAL_STRING("a.bin", l.files[3].path);
+    xc_xdvdfs_listing_free(&l);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -374,6 +398,7 @@ int main(void)
     RUN_TEST(test_structure);
     RUN_TEST(test_depth);
     RUN_TEST(test_validator);
+    RUN_TEST(test_data_order);
     xc_fimg_free(img);
     return UNITY_END();
 }

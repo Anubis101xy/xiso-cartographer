@@ -737,7 +737,7 @@ static bool game_entry(void *ctx, const char *name, bool is_dir, uint64_t size, 
         return false;
     }
     memcpy(copy, rel, (size_t)len + 1U);
-    g->items[g->count++] = (xc_fimg_item){copy, is_dir ? 0 : size, mtime, is_dir};
+    g->items[g->count++] = (xc_fimg_item){copy, is_dir ? 0 : size, mtime, is_dir, 0};
     return true;
 }
 

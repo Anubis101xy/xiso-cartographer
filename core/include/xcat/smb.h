@@ -60,9 +60,10 @@ xc_err xc_smb_url_child(const xc_smb_url *dir, const char *rel, xc_smb_url *out)
    with no control character, none of \ / : * ? " < > |, and not "." or "..". */
 bool xc_smb_valid_name(const char *name, size_t len);
 
-/* §3: if the file name `name` is an image's (it ends in .xiso.iso, .iso, .xiso or .zip, any
-   case), its entry name: without that ending, longest first. False if it isn't one, nothing
-   would be left, or out (cap bytes) is too small. *zip says whether it ends in .zip. */
+/* §3: if the file name `name` is an image's or an archive's (it ends in .xiso.iso, .iso, .xiso,
+   .zip or .7z, any case), its entry name: without that ending, longest first. False if it isn't
+   one, nothing would be left, or out (cap bytes) is too small. *zip says whether it ends in
+   .zip. */
 bool xc_smb_image_name(const char *name, char *out, size_t cap, bool *zip);
 
 /* The NT hash of a password (MD4 of its UTF-16LE form, as SMB's NTLM logins use it; §4), as

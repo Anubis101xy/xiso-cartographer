@@ -51,6 +51,8 @@ typedef struct node {
     bool dir;
     uint64_t size;
     uint64_t mtime;
+    uint64_t order;
+    uint32_t path_rank; /* its place in path order, for ties of `order` */
     /* in its parent's table (§3) */
     uint32_t entry_off;
     uint32_t left;
@@ -103,6 +105,17 @@ static uint64_t round_up(uint64_t v)
 static int by_path(const void *a, const void *b)
 {
     return strcmp(((const node *)a)->path, ((const node *)b)->path);
+}
+
+/* §4: where files' data goes. */
+static int by_data_order(const void *a, const void *b)
+{
+    const node *x = *(const node *const *)a;
+    const node *y = *(const node *const *)b;
+    if (x->order != y->order) {
+        return x->order < y->order ? -1 : 1;
+    }
+    return x->path_rank < y->path_rank ? -1 : x->path_rank > y->path_rank;
 }
 
 static uint8_t fold(uint8_t c)
@@ -412,6 +425,7 @@ static xc_err build(builder *b, const xc_fimg_item *items, xc_fimg *img)
         nd->dir = items[k].dir;
         nd->size = items[k].dir ? 0 : items[k].size;
         nd->mtime = items[k].mtime;
+        nd->order = items[k].dir ? 0 : items[k].order;
         if (nd->path == NULL) {
             return refuse(b, XC_ERR_INVALID_ARG, k, "no path");
         }
@@ -432,13 +446,22 @@ static xc_err build(builder *b, const xc_fimg_item *items, xc_fimg *img)
         return err;
     }
     img->head_end = (uint64_t)sector * SECTOR;
-    /* §4: each non-empty file at a sector, in path order. */
-    uint64_t next = sector;
+    /* §4: each non-empty file at a sector, by `order`, then in path order. */
+    const node **files = malloc((n + 1U) * sizeof *files);
+    if (files == NULL) {
+        return XC_ERR_NOMEM;
+    }
+    size_t nfiles = 0;
     for (size_t k = 0; k < n; k++) {
-        node *nd = &b->nodes[k];
-        if (nd->dir) {
-            continue;
+        b->nodes[k].path_rank = (uint32_t)k;
+        if (!b->nodes[k].dir) {
+            files[nfiles++] = &b->nodes[k];
         }
+    }
+    qsort(files, nfiles, sizeof *files, by_data_order);
+    uint64_t next = sector;
+    for (size_t f = 0; f < nfiles; f++) {
+        node *nd = &b->nodes[files[f] - b->nodes];
         img->all_files++;
         img->file_bytes += nd->size;
         nd->sector = 0;
@@ -452,9 +475,11 @@ static xc_err build(builder *b, const xc_fimg_item *items, xc_fimg *img)
         img->file_count++;
         next += round_up(nd->size) / SECTOR;
         if (next > UINT32_MAX) {
+            free(files);
             return refuse(b, XC_ERR_GAME_FOLDER, nd->item, "the files are too big for one image");
         }
     }
+    free(files);
     img->size = next * SECTOR;
     img->head = malloc((size_t)(img->head_end - HEAD_START));
     if (img->head == NULL) {

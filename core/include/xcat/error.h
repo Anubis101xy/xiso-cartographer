@@ -47,7 +47,7 @@ typedef enum xc_err {
     XC_ERR_IMAGE_HASH,      /* the image's MD5/SHA-1 isn't the expected one (journal.md §7) */
     XC_ERR_NOT_ZIP,         /* no zip end record (docs/formats/zip.md §2) */
     XC_ERR_ZIP_UNSUPPORTED, /* split zip, or a method/encryption we can't read (zip.md §6) */
-    XC_ERR_ZIP_MEMBER,      /* the zip holds no image, or several (zip.md §5) */
+    XC_ERR_ZIP_MEMBER,      /* the archive holds no game: no image (or several), no default.xbe */
     XC_ERR_ZIP_CRC,         /* the image in the zip failed its CRC-32 check (zip.md §9) */
     XC_ERR_SOURCE_SIZE,     /* the file isn't the size its listing gives (archiveorg.md §8) */
     XC_ERR_CATALOG,         /* the catalog file breaks docs/formats/catalog.md (§7) */
@@ -59,9 +59,11 @@ typedef enum xc_err {
     XC_ERR_SMB_DENIED,      /* the login may not open that share, folder or file (smb.md §4) */
     XC_ERR_SMB_NOT_FOUND,   /* no such folder or file on the share (smb.md §4) */
     XC_ERR_SMB,             /* any other SMB failure; the log has the server's reason */
-    XC_ERR_GAME_FOLDER, /* a game folder holds something an install can't take (folder-image.md §2)
-                         */
-    XC_ERR_COUNT_       /* number of codes; not an error */
+    XC_ERR_GAME_FOLDER, /* a game folder holds what an install can't take (folder-image.md §2) */
+    XC_ERR_NOT_7Z,      /* no 7z signature, or its database is damaged (sevenz.md §2) */
+    XC_ERR_7Z_UNSUPPORTED, /* a 7z method the console can't decode, or a password (sevenz.md §4) */
+    XC_ERR_7Z_MEMORY,      /* the 7z's dictionary is larger than the console's free memory (§4) */
+    XC_ERR_COUNT_          /* number of codes; not an error */
 } xc_err;
 
 /* Returns a short, user-readable description. Never NULL, even for unknown values. */

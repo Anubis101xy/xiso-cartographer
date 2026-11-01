@@ -46,7 +46,7 @@ Listing a NAS's shares (SETTINGS > NAS, `xcat-cli smb-shares`) asks its `IPC$` s
 
 The games of a folder are its images and game folders, and those of the folders in it, **2 levels**: the folder itself and the folders directly inside it. That covers a folder of images, a folder of one folder per image, and a folder of extracted games.
 
-- A file is an image if its name ends in `.xiso.iso`, `.iso`, `.xiso` or `.zip`, in any case. Its entry name is the file name without that ending, the longest that matches (`Halo (USA).xiso.iso` → `Halo (USA)`), as for archive.org ([archiveorg.md §4](archiveorg.md#4-the-entry)). A name that leaves nothing (`.iso`) isn't an image. Other files are left out without a word.
+- A file is an image if its name ends in `.xiso.iso`, `.iso`, `.xiso`, `.zip` or `.7z`, in any case. Its entry name is the file name without that ending, the longest that matches (`Halo (USA).xiso.iso` → `Halo (USA)`), as for archive.org ([archiveorg.md §4](archiveorg.md#4-the-entry)). A name that leaves nothing (`.iso`) isn't an image. Other files are left out without a word. A zip or 7z installs its image or its game or app folder ([zip.md](zip.md), [sevenz.md](sevenz.md)).
 - Folders whose names start with `.` or `@`, and `#recycle`, `$RECYCLE.BIN`, `#snapshot` and `lost+found` (any case), aren't gone into: NAS systems keep their own data there.
 - A folder the login may not open, or that disappears while it's listed, is skipped.
 - Names an address can't hold (§1.3) are left out.
@@ -111,3 +111,4 @@ Nothing else is sent: no broadcast, no multicast, nothing outside the network. O
 |---|---|---|
 | 1.0 | 2026-10-29 | First version (ADR 0018). |
 | 1.1 | 2026-10-30 | §3.1, §3.2: extracted game folders, listed and installed ([folder-image.md](folder-image.md)); §1.3: a trailing `/` on an entry names one. |
+| 1.2 | 2026-11-01 | §3: `.7z` files are listed ([sevenz.md](sevenz.md)). |

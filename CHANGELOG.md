@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-01
+
+Archives, apps, and deleting installs.
+
+### Added
+
+- **7z archives** (docs/formats/sevenz.md, ADR 0018 decision 9): a `.7z` that holds one `.iso`/`.xiso` streams it into the install, and one that holds a game or app folder installs the folder. LZMA, LZMA2 (with BCJ) and uncompressed 7z are read; BCJ2, PPMd and passwords are refused by name before anything is written. The dictionary must fit in the console's free memory (7-Zip's Normal and usually Maximum levels do; Ultra doesn't), and the message says so with both sizes. `@smb` folders list `.7z` files, and so does `E:\xcat\isos\`. The LZMA SDK's 7z decoder (public domain) is vendored in `third_party/lzma`.
+- **Zips of game and app folders** (folder-image.md §7, zip.md §5): a zip with no image installs the folder of its shallowest `default.xbe` (an app's `My App/` inside the zip, or the zip's top), leaving out what's beside it and macOS clutter, each member inflated as it's read and checked against its CRC-32.
+- **Apps**: the install question offers INSTALL or AS AN APP (to `E:\Apps`); items from a folder named Apps, Applications, Homebrew, Emulators or Dashboards go to `E:\Apps` by default (AS A GAME for the install folder). INSTALLED lists what this app installed in both, and PLAY starts either.
+- **Deleting installs** (ADR 0018 decision 10): A on an unfinished install in INSTALLED, DELETE in an installed game's PLAY question there, or DELETE in GAMES' NOT FINISHED question (CARRY ON / DELETE / CANCEL) deletes the folder after asking again (KEEP is the default). Only folders this app made are ever deleted; saved games in `E:\UDATA` stay.
+- `xcat-cli install` takes `.7z` and folder archives, and `--max-dict <MiB>` to bound a 7z's dictionary as on a console.
+- New core modules `folder_image`'s `order`, `arc_folder`, `zip_folder` and `sevenz`, tested against archives 7-Zip and Python made (`core/tests/data/`, `tools/fixtures/sevenz/`) and fuzzed (`fuzz_sevenz`); error codes `XC_ERR_NOT_7Z`, `XC_ERR_7Z_UNSUPPORTED`, `XC_ERR_7Z_MEMORY`.
+
+### Changed
+
+- `XC_ERR_ZIP_MEMBER` and `XC_ERR_ZIP_CRC` speak of archives: "The archive holds no game: one .iso or .xiso image, or a folder with a default.xbe".
+
 ## [0.10.1] - 2026-11-01
 
 After the first run on a console.

@@ -42,6 +42,7 @@ typedef struct ui_lib_item {
     const char *about; /* wrapped below: who made it, the release, where it comes from */
     ui_lib_state state;
     const char *note; /* what happened, or where it's installed; may be NULL */
+    bool app;         /* looks like an app: installing offers the apps folder first */
 } ui_lib_item;
 
 typedef enum ui_lib_section {
@@ -53,7 +54,8 @@ typedef enum ui_lib_section {
 
 typedef enum ui_lib_action {
     UI_LIB_NONE,          /* redraw if the screen says it changed */
-    UI_LIB_INSTALL,       /* install items[ui_library_game()]: the user said yes */
+    UI_LIB_INSTALL,       /* install items[ui_library_game()]: the user said yes, to the apps
+                             folder if ui_library_to_apps() */
     UI_LIB_EXIT,          /* back to the dashboard: the user said yes */
     UI_LIB_LOGIN,         /* log in with email and password, then ui_library_forget_password */
     UI_LIB_LOGOUT,        /* log out of archive.org: the user said yes */
@@ -65,6 +67,9 @@ typedef enum ui_lib_action {
     UI_LIB_SOURCE_KIND,   /* (internal: the dialog asking what kind of source to add) */
     UI_LIB_PLAY,          /* start the highlighted installed game: in GAMES ui_library_game(),
                              in INSTALLED ui_library_installed() (lib->section says which) */
+    UI_LIB_DELETE,        /* delete the highlighted game's folder, the user said yes: in INSTALLED
+                             installed[ui_library_installed()], in GAMES what an unfinished
+                             install of items[ui_library_game()] left */
     UI_LIB_NAS_PAGE,      /* the NAS page opened: give it its NASes (ui_library_set_nas) and
                              say where the console is (ui_library_set_console) */
     UI_LIB_NAS_SCAN,      /* scan the network for a NAS, then ui_library_set_nas */
@@ -176,6 +181,8 @@ typedef struct ui_library {
     char password[UI_LIB_PASSWORD_MAX]; /* wiped when the login is done or cancelled */
     char tell_title[32];                /* an open message's */
     const char *install_dir;            /* where games install: the caller's */
+    const char *apps_dir;               /* where apps install: the caller's */
+    bool to_apps;                       /* UI_LIB_INSTALL's: to apps_dir */
     const ui_lib_folder *folders;       /* the folders SETTINGS offers: the caller's */
     int folder_count;
     ui_list settings_list;    /* SETTINGS' lines (ui_lib_setting) */
@@ -227,6 +234,9 @@ int ui_library_game(const ui_library *lib);
 /* True if every word of `query` (split at spaces) is in the item's name, facts or about,
    ASCII case-insensitive. A query of only spaces, or "", matches everything. */
 bool ui_library_matches(const ui_lib_item *it, const char *query);
+
+/* True if UI_LIB_INSTALL is to the apps folder (lib->apps_dir), not the install folder. */
+bool ui_library_to_apps(const ui_library *lib);
 
 /* Gives INSTALLED its list (again, after an install), keeping its place where it can. */
 void ui_library_set_installed(ui_library *lib, const ui_lib_item *items, int count);
@@ -324,7 +334,12 @@ int ui_library_rows(const ui_draw *d);
    the password (dots only), and gives UI_LIB_NAS_LOGIN; B wipes the password. While browsing,
    A on a line gives UI_LIB_NAS_OPEN, A on the `use` line or X on a line asks before
    UI_LIB_NAS_USE, and B gives UI_LIB_NAS_UP. A on an installed game, in GAMES or INSTALLED, asks
-   before UI_LIB_PLAY. In a dialog or the keyboard, their buttons. */
+   before UI_LIB_PLAY. A on a game not installed asks before UI_LIB_INSTALL: INSTALL (to the
+   install folder, or for an item marked `app` to the apps folder), the other folder, or
+   CANCEL; on one that isn't finished (unfinished, failed or stopped): CARRY ON, DELETE or
+   CANCEL. DELETE, the DELETE of the PLAY question in INSTALLED, and A on an unfinished game in
+   INSTALLED ask again before UI_LIB_DELETE (KEEP is the default). In a dialog or the keyboard,
+   their buttons. */
 ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows);
 
 /* The name of what the screen shows, for the UI script (docs/formats/ui-script.md §6): an open

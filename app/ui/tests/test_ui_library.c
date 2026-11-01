@@ -15,9 +15,9 @@ void tearDown(void) {}
 
 static ui_lib_item items[3] = {
     {"First game", "2004  |  Europe  |  4.38 GB", "By someone. From the map.", UI_LIB_NOT_TRIED,
-     NULL},
-    {"Second game", "", "From E:/xcat/isos.", UI_LIB_INSTALLED, "In E:/Games/Second game"},
-    {"Third game", "2002", NULL, UI_LIB_FAILED, "No space left"},
+     NULL, false},
+    {"Second game", "", "From E:/xcat/isos.", UI_LIB_INSTALLED, "In E:/Games/Second game", false},
+    {"Third game", "2002", NULL, UI_LIB_FAILED, "No space left", false},
 };
 
 static int shown[8]; /* the library's list of what GAMES shows */
@@ -79,8 +79,53 @@ static void test_open(void)
     TEST_ASSERT_EQUAL_INT(11, ui_library_rows(&fake_draw));
 }
 
-/* Nothing installs unasked: A asks first, and only INSTALL installs. */
+/* Nothing installs unasked: A asks first, and only INSTALL installs; AS AN APP installs to the
+   apps folder. */
 static void test_install_asks_first(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, lib.asking);
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "First game"));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "E:\\Apps"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5)); /* CANCEL */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5)); /* to CANCEL */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_FALSE(ui_library_to_apps(&lib));
+    TEST_ASSERT_EQUAL_INT(0, lib.list.cur); /* the game asked about */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+    /* AS AN APP, the middle button */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_TRUE(ui_library_to_apps(&lib));
+}
+
+/* An item from an apps folder installs to E:\Apps first; AS A GAME to the install folder. */
+static void test_install_app(void)
+{
+    static const ui_lib_item apps[1] = {{"XBMC4Gamers", "", NULL, UI_LIB_NOT_TRIED, NULL, true}};
+    static int app_shown[1];
+    ui_library lib;
+    ui_library_open(&lib, apps, 1, app_shown);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "looks like an app"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_TRUE(ui_library_to_apps(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5)); /* AS A GAME */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_FALSE(ui_library_to_apps(&lib));
+}
+
+/* A game that isn't finished: CARRY ON installs, DELETE asks again (KEEP first). */
+static void test_unfinished_carry_on_or_delete(void)
 {
     ui_library lib;
     ui_library_open(&lib, items, 3, shown);
@@ -88,19 +133,26 @@ static void test_install_asks_first(void)
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, lib.asking);
-    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Third game"));
-    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5)); /* CANCEL */
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Third game isn't finished"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5)); /* CARRY ON */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5)); /* DELETE */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_DELETE, lib.asking);
+    TEST_ASSERT_EQUAL_STRING("ask-delete", ui_library_screen(&lib));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "unfinished install of Third game"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5)); /* KEEP, the default */
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
-    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5)); /* to CANCEL */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
-    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
-    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5));
-    TEST_ASSERT_EQUAL_INT(2, lib.list.cur); /* the game asked about */
-    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_LEFT, 5)); /* to DELETE */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_DELETE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(2, ui_library_game(&lib));
 }
 
-/* An installed game: A asks to play it; in GAMES it can also be installed again. */
+/* An installed game: A asks to play it; in GAMES it can also be installed again, in INSTALLED
+   deleted. An unfinished one in INSTALLED: A asks to delete it. */
 static void test_play_installed(void)
 {
     ui_library lib;
@@ -120,10 +172,9 @@ static void test_play_installed(void)
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
 
-    /* INSTALLED: A on a finished install asks to play it; on an unfinished one, nothing. */
     static const ui_lib_item found[2] = {
-        {"Halo", "4.1 GB", NULL, UI_LIB_INSTALLED, "E:\\Games\\Halo"},
-        {"Fable", NULL, NULL, UI_LIB_UNFINISHED, "E:\\Games\\Fable"},
+        {"Halo", "4.1 GB", NULL, UI_LIB_INSTALLED, "E:\\Games\\Halo", false},
+        {"Fable", NULL, NULL, UI_LIB_UNFINISHED, "E:\\Games\\Fable", false},
     };
     ui_library_set_installed(&lib, found, 2);
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_LEFT, 5));
@@ -135,8 +186,21 @@ static void test_play_installed(void)
     TEST_ASSERT_NOT_NULL(strstr(lib.message, "Halo"));
     TEST_ASSERT_EQUAL_INT(UI_LIB_PLAY, ui_library_input(&lib, UI_BTN_A, 5));
     TEST_ASSERT_EQUAL_INT(0, ui_library_installed(&lib));
+    /* PLAY's DELETE asks again; DELETE there deletes. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_DELETE, lib.asking);
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Delete Halo?"));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "UDATA"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_LEFT, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_DELETE, ui_library_input(&lib, UI_BTN_A, 5));
+    /* The unfinished one: A asks to delete it. */
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_DELETE, lib.asking);
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "unfinished install of Fable"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
 }
 
@@ -336,7 +400,7 @@ static void test_draw(void)
 
 static void test_stopped(void)
 {
-    const ui_lib_item stopped[1] = {{"Game", "", NULL, UI_LIB_STOPPED, "Stopped."}};
+    const ui_lib_item stopped[1] = {{"Game", "", NULL, UI_LIB_STOPPED, "Stopped.", false}};
     ui_library lib;
     ui_library_open(&lib, stopped, 1, shown);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
@@ -347,7 +411,7 @@ static void test_stopped(void)
 /* Started in an earlier run: UNFINISHED, and counted as unfinished. */
 static void test_unfinished(void)
 {
-    const ui_lib_item half[1] = {{"Game", "", NULL, UI_LIB_UNFINISHED, "In E:/Games/Game"}};
+    const ui_lib_item half[1] = {{"Game", "", NULL, UI_LIB_UNFINISHED, "In E:/Games/Game", false}};
     ui_library lib;
     ui_library_open(&lib, half, 1, shown);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
@@ -357,8 +421,9 @@ static void test_unfinished(void)
 }
 
 static const ui_lib_item found[2] = {
-    {"Alpha folder", "1.00 GB  |  12 files", "Title 4D53000A.", UI_LIB_INSTALLED, "E:/Games/A"},
-    {"Beta folder", "", "Not finished.", UI_LIB_UNFINISHED, "E:/Games/B"},
+    {"Alpha folder", "1.00 GB  |  12 files", "Title 4D53000A.", UI_LIB_INSTALLED, "E:/Games/A",
+     false},
+    {"Beta folder", "", "Not finished.", UI_LIB_UNFINISHED, "E:/Games/B", false},
 };
 
 /* INSTALLED: its own list and place; A installs nothing there. */
@@ -383,6 +448,8 @@ static void test_installed_section(void)
     TEST_ASSERT_EQUAL_INT(1, lib.installed_list.cur);
     TEST_ASSERT_EQUAL_INT(0, lib.list.cur); /* GAMES keeps its place */
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_DELETE, lib.asking); /* unfinished: A asks to delete it */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
     fake_reset();
     ui_library_draw(&fake_draw, &lib, 0, NULL);
@@ -449,10 +516,10 @@ static void type(ui_library *lib, const char *word)
 }
 
 static const ui_lib_item many[4] = {
-    {"Racing One", "2003  |  USA", "By Studio Fast.", UI_LIB_NOT_TRIED, NULL},
-    {"Puzzle Two", "2004", "From E:/xcat/isos.", UI_LIB_NOT_TRIED, NULL},
-    {"Racing Three", "2005  |  Europe", NULL, UI_LIB_INSTALLED, "In E:/Games/Racing Three"},
-    {"Fighter", NULL, "By Studio Fast.", UI_LIB_NOT_TRIED, NULL},
+    {"Racing One", "2003  |  USA", "By Studio Fast.", UI_LIB_NOT_TRIED, NULL, false},
+    {"Puzzle Two", "2004", "From E:/xcat/isos.", UI_LIB_NOT_TRIED, NULL, false},
+    {"Racing Three", "2005  |  Europe", NULL, UI_LIB_INSTALLED, "In E:/Games/Racing Three", false},
+    {"Fighter", NULL, "By Studio Fast.", UI_LIB_NOT_TRIED, NULL, false},
 };
 
 static void test_matches(void)
@@ -821,8 +888,8 @@ static void test_sources(void)
 static void test_set_items(void)
 {
     static ui_lib_item two[2] = {
-        {"Alpha", "", NULL, UI_LIB_NOT_TRIED, NULL},
-        {"Beta", "", NULL, UI_LIB_NOT_TRIED, NULL},
+        {"Alpha", "", NULL, UI_LIB_NOT_TRIED, NULL, false},
+        {"Beta", "", NULL, UI_LIB_NOT_TRIED, NULL, false},
     };
     static int shown2[2];
     ui_library lib;
@@ -956,6 +1023,8 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_open);
     RUN_TEST(test_install_asks_first);
+    RUN_TEST(test_install_app);
+    RUN_TEST(test_unfinished_carry_on_or_delete);
     RUN_TEST(test_play_installed);
     RUN_TEST(test_nas);
     RUN_TEST(test_back_asks_before_leaving);

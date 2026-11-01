@@ -25,7 +25,7 @@ extern "C" {
 #define XC_CATALOG_MAX_VARIANT 16                     /* §4.1 */
 #define XC_CATALOG_VERSION_MAJOR 1
 #define XC_CATALOG_VERSION_MINOR 0
-#define XC_CATALOG_NONE ((size_t)-1) /* "not found" from the find functions */
+#define XC_CATALOG_NONE ((size_t) - 1) /* "not found" from the find functions */
 
 /* An opened catalog. Fields are filled by xc_catalog_open; treat them as read-only. */
 typedef struct xc_catalog {

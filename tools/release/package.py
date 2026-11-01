@@ -39,6 +39,8 @@ LICENSES = [
      "third_party/nxdk/lib/usb/libusbohci/DISCLAIMER.md"),
     ("libsmb2.txt", "libsmb2 (NAS shared folders, SMB2/3): LGPL-2.1, Ronnie Sahlberg; its source: "
      "licenses\\libsmb2-source.txt", "third_party/libsmb2/LICENCE-LGPL-2.1.txt"),
+    ("LZMA-SDK.txt", "LZMA SDK, 7z decoder (7z archives): public domain, Igor Pavlov",
+     "third_party/lzma/7zC.txt"),
 ]
 
 # The fonts' OFL texts ship in fonts\ next to them, as the build copies them.

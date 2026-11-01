@@ -124,6 +124,8 @@ xcat_add_test(test_extract)
 xcat_add_test(test_fatx)
 xcat_add_test(test_url)
 xcat_add_test(test_folder_image)
+xcat_add_test(test_sevenz ARGS ${CMAKE_CURRENT_SOURCE_DIR}/data/7z)
+xcat_add_test(test_arc_folder ARGS ${CMAKE_CURRENT_SOURCE_DIR}/data/zip)
 xcat_add_test(test_smb)
 xcat_add_test(test_netbios)
 xcat_add_test(test_http)
@@ -348,6 +350,10 @@ xcat_add_fuzzer(fuzz_sntp SEEDS ${_sntp_seeds})
 # smb:// URL seeds are committed (docs/formats/smb.md §1).
 file(GLOB _smb_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/smb/*.seed)
 xcat_add_fuzzer(fuzz_smb SEEDS ${_smb_seeds})
+
+# 7z seeds are the archives test_sevenz reads (tools/fixtures/sevenz/make.py).
+file(GLOB _sevenz_seeds ${CMAKE_CURRENT_SOURCE_DIR}/data/7z/*.7z)
+xcat_add_fuzzer(fuzz_sevenz SEEDS ${_sevenz_seeds})
 
 # Game folder listing seeds are committed (docs/formats/folder-image.md).
 file(GLOB _folder_image_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/folder-image/*.seed)

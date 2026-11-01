@@ -15,6 +15,7 @@ Homebrew game catalog and installer for the modded original Xbox. Browse the ful
 - **You choose:** the map is a catalog. Nothing installs until you pick a game and press A.
 - **Installs on the console, no PC:** files are stream-extracted straight into `E:\Games\<title>` (or a folder on F: or G:, chosen in SETTINGS), with no temporary copy, so full-disc images of 7+ GB install too. Trimmed xisos, full-disc `.iso` dumps, and `.zip` files holding one image (stored or Deflate, Zip64) all work.
 - **HTTPS and archive.org logins:** TLS 1.2 with certificate checks against built-in roots, the clock set from NTP. Log in to archive.org on the Xbox with the on-screen keyboard: only the session is saved, never the password. `@archiveorg <item>` in the map lists every game the item holds, with its published size and hashes.
+- **Archives and apps:** `.7z` and `.zip` archives install straight from where they are, whether they hold an image or a game or app folder; apps go to `E:\Apps`. Unfinished or unwanted installs can be deleted from the console.
 - **Games from your NAS:** SETTINGS > NAS finds file sharing servers on your network, logs in (only a hash of the password is kept) and adds a folder. Its images and extracted game folders install over SMB2/3, with nothing to set up on a PC ([setup guide](docs/nas-setup.md)).
 - **PLAY:** start an installed game from the app.
 - **Resumable and verified:** a pulled cable is retried, a power cut resumes where it stopped, and every file is read back and checked against its CRC-32 (and trimmed xisos against their MD5 and SHA-1).
@@ -78,7 +79,7 @@ See [docs/build-xbox.md](docs/build-xbox.md) for building without `make`, the Wi
 | [docs/formats/map.md](docs/formats/map.md) | The map file format (where your images are) |
 | [docs/formats/archiveorg.md](docs/formats/archiveorg.md) | `@archiveorg`: turning an archive.org item's listing into map entries |
 | [docs/formats/credentials.md](docs/formats/credentials.md) | Logins for sources that need them: host-scoped tokens, kept out of maps |
-| [docs/nas-setup.md](docs/nas-setup.md), [docs/formats/smb.md](docs/formats/smb.md), [folder-image.md](docs/formats/folder-image.md) | Games from a NAS: setting it up, the SMB rules, and how extracted game folders install |
+| [docs/nas-setup.md](docs/nas-setup.md), [docs/formats/smb.md](docs/formats/smb.md), [folder-image.md](docs/formats/folder-image.md), [sevenz.md](docs/formats/sevenz.md) | Games from a NAS: setting it up, the SMB rules, how extracted game folders and archives install, and 7z |
 | [docs/formats/zip.md](docs/formats/zip.md), [stream-install.md](docs/formats/stream-install.md) | Installing from zips, and from Deflate streams that can only be read front to back |
 | [docs/formats/http.md](docs/formats/http.md) | The HTTP client: Range requests, redirects, retries and resume |
 | [docs/formats/fatx-names.md](docs/formats/fatx-names.md) | What the Xbox hard disk can store, measured on the console, and when an install is refused |

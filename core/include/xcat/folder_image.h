@@ -33,6 +33,10 @@ typedef struct xc_fimg_item {
     uint64_t size;    /* a file's size; ignored for folders */
     uint64_t mtime;   /* when it last changed, in any unit the platform has (§5 only) */
     bool dir;
+    /* Files' data is laid out by this, lowest first, then by path (§4): an archive whose
+       files must be read in its own order (7z's solid blocks) gives that order. 0 for all
+       is path order. */
+    uint64_t order;
 } xc_fimg_item;
 
 /* Reads `len` bytes at `offset` of items[item], a file, into `buf`: all of them, or an error. */

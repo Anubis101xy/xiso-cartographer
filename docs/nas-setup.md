@@ -16,9 +16,11 @@ The console copies the game to its own drive (E:\Games by default), then starts 
 
 - Disc images: `.iso`, `.xiso`, `.xiso.iso` (Redump full-disc images and trimmed xisos both work).
 - Zips holding one image: `.zip` (stored or Deflate).
+- 7z archives holding one image: `.7z`, unpacked as it installs, with nothing written to a temporary file. LZMA and LZMA2 (7-Zip's usual methods) work. The console has to hold the archive's dictionary in memory: 7-Zip's **Normal** level (16 MB) always fits, **Maximum** (32 MB) usually does, **Ultra** (64 MB) doesn't. If one doesn't fit, the message says how much it needs and how much the Xbox has; repack it at Normal level, or extract it on the NAS.
+- Zips and 7z archives holding a game or app folder (a `default.xbe` at their top, or in a folder inside, like `My App/default.xbe`): that folder is installed. Whatever sits beside it (a readme) and macOS clutter are left out.
 - Extracted game folders: any folder with a `default.xbe` in it, copied file by file with the same resume and checks. NAS clutter (`.DS_Store`, `._` files, `@eaDir`, `#recycle`) is skipped.
 - Images and game folders can sit in the folder you pick, or one folder down (`Xbox\Halo (USA)\Halo (USA).iso`, `Xbox\Halo (USA)\default.xbe`). If the folder you pick is itself a game folder, it's listed as that one game.
-- Not yet: compressed `.cci` / `.cso` images. They don't show up.
+- Not supported: `.rar` archives, compressed `.cci` / `.cso` images, and 7z archives with a password or made with BCJ2 or PPMd (7-Zip's Ultra level for programs, or a PPMd choice). RAR, CCI and CSO files don't show up; the others say why when you install them.
 - Names longer than FATX allows (42 characters per name) are refused with the list of problems: rename it on the NAS. In a game folder, two names that differ only in upper and lower case (`Data` and `data`) can't both go on the Xbox's drive either; the log names them.
 
 ## 2. On the console
@@ -34,7 +36,20 @@ The console copies the game to its own drive (E:\Games by default), then starts 
    The question that follows names exactly the folder that will be added; ADD confirms.
 6. The console writes an `@smb` line in your map (`E:\xcat\map.txt`), lists the games and takes you to **GAMES**. Each game's details say where on the NAS it is.
 7. Pick a game and install it. A progress screen shows the copy, then it reads every file back to check it. If the network drops, it resumes where it stopped next time you install the same game.
-8. Installed games: **A > PLAY** starts the game. In GAMES an installed game also offers INSTALL AGAIN.
+8. Installed games: **A > PLAY** starts the game. In GAMES an installed game also offers INSTALL AGAIN; in INSTALLED, DELETE.
+
+### Apps
+
+The install question has a second button: **AS AN APP** puts it in `E:\Apps` instead of the games folder. Anything in a NAS folder called `Apps`, `Applications`, `Homebrew`, `Emulators` or `Dashboards` goes to `E:\Apps` by default (its second button is **AS A GAME**), so keeping your apps in a folder with one of those names saves a press. Installed apps are listed in INSTALLED with the games, and PLAY starts them.
+
+### When an install fails
+
+An install that stopped or failed keeps what it wrote, so installing it again carries on. If you'd rather have the space back:
+
+- in **GAMES**, A on it asks **CARRY ON / DELETE / CANCEL**;
+- in **INSTALLED**, A on an unfinished one asks to delete it, and on an installed one PLAY's middle button is **DELETE**.
+
+Either way it asks once more, with **KEEP** highlighted. Only folders this app installed can be deleted this way, and saved games stay (they're in `E:\UDATA`, not in the game's folder).
 
 You can add more than one folder (or more than one NAS): repeat 2–5.
 

@@ -356,7 +356,7 @@ static bool ends_ci(const char *s, size_t len, const char *suffix)
 
 bool xc_smb_image_name(const char *name, char *out, size_t cap, bool *zip)
 {
-    static const char *const endings[] = {".xiso.iso", ".iso", ".xiso", ".zip"};
+    static const char *const endings[] = {".xiso.iso", ".iso", ".xiso", ".zip", ".7z"};
     const char *last = strrchr(name, '/');
     last = last != NULL ? last + 1 : name;
     size_t len = strlen(last);

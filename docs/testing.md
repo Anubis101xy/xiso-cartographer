@@ -457,6 +457,31 @@ The app's logo as its XBE's title image ([xbe-title-image.md](formats/xbe-title-
 
 First run on the owner's console (0.10.0, 2026-11-01): scan, login, browse and install worked; the login wasn't kept unless a folder was added, a folder picked in the list could open another (the list was sorted for display, the names it opened weren't), and the menus didn't say which folder was meant. Fixed in 0.10.1; steps 1, 4–6 check it.
 
+## Archives, apps and deleting (0.11.0)
+
+[ADR 0018](adr/0018-smb-sources.md) decisions 9-11.
+
+**On the PC** (done, 2026-11-01): `test_sevenz` (every method 7-Zip writes that's supported, read in pieces across buffer boundaries and backwards; an image streamed from 0 and from the middle; PPMd and passwords refused by name; the dictionary bound; damaged and cut archives; a folder through the image), `test_arc_folder` (root choice, clutter, made-up folders, refusals; a Python-made zip with Deflate and stored members, read back to front), the UI's delete and app questions (`test_ui_library`), and 20,000 mutated archives through `fuzz_sevenz`. `xcat-cli install`, from files and over SMB (Go server), of archives 7-Zip 25.01 made from synthetic folders:
+
+| Archive | Result |
+|---|---|
+| `.7z` with one image: LZMA2, LZMA, stored; one with late files (`late.iso`) | Identical to the image's own install; stored read in place, the others streamed; SMB read exactly the archive's size |
+| `.7z` with a 402-file game folder: solid (7-Zip's order, by extension), one block per file, BCJ on everything | Identical to the folder (`diff -r`), 15-16 MB/s; the solid one read its 15 MB once |
+| `.7z` with PPMd, BCJ2, a password on the files, a password on the names | Refused before anything is written, naming the method or the password |
+| `.7z` needing 15 MiB with `--max-dict 4` | Refused: "needs a 15 MiB dictionary; this console has room for 4 MiB" |
+| `.7z` with a flipped byte, cut short, or random bytes | `XC_ERR_CORRUPT`, `XC_ERR_NOT_7Z` |
+| `.zip` with a game folder (Deflate, in a top folder, with `__MACOSX` and a readme beside it); one with an app at its top (stored); two games; LZMA members | Identical; identical; "several games"; refused, naming the method |
+
+**On the console** (to do):
+
+| Step | How | Pass |
+|---|---|---|
+| 1 | Install a `.7z` image made at 7-Zip's Normal level from the NAS | Verified; `install.log` says "7z: room for a N MiB dictionary" and the MB/s |
+| 2 | The same at Ultra level | Refused with both dictionary sizes |
+| 3 | Install a zipped app from a NAS folder named `Apps` | The question says it looks like an app; it lands in `E:\Apps\<name>`; INSTALLED lists it; PLAY starts it |
+| 4 | Stop an install with B; GAMES > A on it > DELETE > DELETE | The folder is gone; the game says nothing is installed |
+| 5 | INSTALLED > A on an installed game > DELETE > KEEP, then DELETE > DELETE | Kept, then deleted; its saves in `E:\UDATA` are still there |
+
 ## FATX probe (M2)
 
 No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/src/fatx.c` ([fatx-names.md](formats/fatx-names.md)) come from the console's own kernel, measured by `app/fatx-probe`.

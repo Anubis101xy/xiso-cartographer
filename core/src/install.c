@@ -9,10 +9,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "xcat/arc_folder.h"
 #include "xcat/crc32.h"
 #include "xcat/hash.h"
 #include "xcat/journal.h"
 #include "xcat/seq.h"
+#include "xcat/sevenz.h"
 #include "xcat/version.h"
 #include "xcat/xbe.h"
 #include "xcat/xdvdfs.h"
@@ -82,6 +84,14 @@ typedef struct job {
     counted count;
     xc_source image;      /* the image: src, or a stored zip member's window of it */
     xc_window_source win; /* a stored member */
+    /* An archive's game or app folder (folder-image.md §7): its image is made of members. */
+    xc_zip_listing folder_zl;
+    xc_zip_folder *zip_folder;
+    /* 7z archives (sevenz.md): the archive, and the image's index in it, or its folder */
+    xc_7z *sevenz;
+    size_t seven_index;
+    xc_arc_folder *seven_folder;
+    bool no_hash; /* not an image anyone has: nothing to hash (folder-image.md §5) */
     /* Deflate zip members (stream-install.md) */
     xc_zip_member member;
     xc_journal_zip_state zjournal;
@@ -311,7 +321,7 @@ static xc_err on_checkpoint(void *ctx, size_t index, uint32_t bytes, uint32_t cr
 static xc_err start_hash(job *j, uint64_t *from)
 {
     *from = 0;
-    if (j->req->no_hash) {
+    if (j->req->no_hash || j->no_hash) {
         j->res->hash_note = "not asked for";
         return XC_OK;
     }
@@ -772,6 +782,15 @@ static xc_err on_zip_checkpoint(void *ctx, const xc_zip_position *pos, const uin
 }
 
 /* xc_seq_stream_fn: the member from the last checkpoint at or before `from`. */
+/* sevenz.md §5: the image from a 7z, decoded from its block's start each pass. */
+static xc_err sevenz_stream(void *ctx, uint64_t from, xc_source_data_fn fn, void *fn_ctx)
+{
+    job *j = ctx;
+    j->pass++;
+    j->seq_ctx = fn_ctx;
+    return xc_7z_stream(j->sevenz, j->seven_index, from, fn, fn_ctx);
+}
+
 static xc_err zip_stream(void *ctx, uint64_t from, xc_source_data_fn fn, void *fn_ctx)
 {
     job *j = ctx;
@@ -1091,7 +1110,9 @@ static xc_err run_zip_install(job *j)
     if (err != XC_OK) {
         return err;
     }
-    j->states = io->spool_sync != NULL && sink.sync != NULL;
+    /* A 7z's decoder state isn't saved (sevenz.md §5): after a power cut its stream starts
+       again, and the files already finished are kept. */
+    j->states = io->spool_sync != NULL && sink.sync != NULL && j->sevenz == NULL;
     uint8_t *state = NULL;
     size_t state_len = 0;
     if (res->resumed) {
@@ -1123,7 +1144,7 @@ static xc_err run_zip_install(job *j)
         xc_seq_req q;
         memset(&q, 0, sizeof q);
         q.image_size = j->member.size;
-        q.stream = zip_stream;
+        q.stream = j->sevenz != NULL ? sevenz_stream : zip_stream;
         q.stream_ctx = j;
         q.sink = &sink;
         q.spool = &spool;
@@ -1169,7 +1190,9 @@ static xc_err run_zip_install(job *j)
     }
     remove_state_files(j);
     res->file_count = j->listing.file_count;
-    res->hash_note = "zip: every byte checked by the member's CRC-32 instead (zip.md §9)";
+    res->hash_note = j->sevenz != NULL
+                         ? "7z: every byte checked by the file's CRC-32 instead (sevenz.md §5)"
+                         : "zip: every byte checked by the member's CRC-32 instead (zip.md §9)";
 
     /* §7: read back against the CRC-32s, from this attempt or the journal */
     size_t files = j->listing.file_count > 0 ? j->listing.file_count : 1;
@@ -1213,6 +1236,25 @@ static xc_err run_zip(job *j)
     }
     size_t index = 0;
     err = xc_zip_pick_image(&zl, &index);
+    size_t images = 0;
+    for (size_t i = 0; i < zl.count; i++) {
+        images += xc_zip_is_image_name(zl.entries[i].name) ? 1U : 0U;
+    }
+    if (err == XC_ERR_ZIP_MEMBER && images == 0) {
+        /* No image: a game or app folder, if it has a default.xbe (folder-image.md §7). */
+        j->folder_zl = zl;
+        err = xc_zip_folder_open(&j->src, &j->folder_zl, &j->zip_folder, &j->image,
+                                 j->res->folder_why, sizeof j->res->folder_why);
+        if (err != XC_OK) {
+            return err;
+        }
+        const xc_arc_folder *af = xc_zip_folder_arc(j->zip_folder);
+        j->res->archive_folder = true;
+        (void)snprintf(j->res->zip_member, sizeof j->res->zip_member, "%s/",
+                       xc_arc_folder_root(af));
+        j->no_hash = true;
+        return run_install(j);
+    }
     if (err == XC_OK) {
         (void)snprintf(j->res->zip_member, sizeof j->res->zip_member, "%s", zl.entries[index].name);
         j->res->zip_method = zl.entries[index].method;
@@ -1226,6 +1268,64 @@ static xc_err run_zip(job *j)
         xc_source_window(&j->image, &j->win, &j->src, j->member.data_offset, j->member.size);
         return run_install(j);
     }
+    return run_zip_install(j);
+}
+
+/* sevenz.md §3: the 7z's one image (stored: read in place; compressed: streamed), or its game
+   or app folder (folder-image.md §7). */
+static xc_err run_7z(job *j)
+{
+    j->p.phase = XC_INSTALL_READING_TABLES;
+    if (!report(j)) {
+        return XC_ERR_CANCELLED;
+    }
+    xc_install_result *res = j->res;
+    xc_err err =
+        xc_7z_open(&j->src, j->req->max_dict, &j->sevenz, res->folder_why, sizeof res->folder_why);
+    if (err != XC_OK) {
+        return err;
+    }
+    size_t index = 0;
+    err = xc_7z_pick_image(j->sevenz, &index);
+    size_t images = 0;
+    for (size_t i = 0; i < xc_7z_count(j->sevenz); i++) {
+        images +=
+            !xc_7z_is_dir(j->sevenz, i) && xc_zip_is_image_name(xc_7z_path(j->sevenz, i)) ? 1U : 0U;
+    }
+    if (err == XC_ERR_ZIP_MEMBER && images == 0) {
+        err = xc_7z_folder_open(j->sevenz, &j->seven_folder, &j->image, res->folder_why,
+                                sizeof res->folder_why);
+        if (err != XC_OK) {
+            return err;
+        }
+        res->archive_folder = true;
+        (void)snprintf(res->zip_member, sizeof res->zip_member, "%s/",
+                       xc_arc_folder_root(j->seven_folder));
+        j->no_hash = true;
+        return run_install(j);
+    }
+    if (err != XC_OK) {
+        return err;
+    }
+    (void)snprintf(res->zip_member, sizeof res->zip_member, "%s", xc_7z_path(j->sevenz, index));
+    err = xc_7z_check(j->sevenz, index, res->folder_why, sizeof res->folder_why);
+    if (err != XC_OK) {
+        return err;
+    }
+    uint64_t at = 0;
+    uint64_t size = xc_7z_size(j->sevenz, index);
+    if (xc_7z_stored_at(j->sevenz, index, &at)) {
+        xc_source_window(&j->image, &j->win, &j->src, at, size); /* no compression */
+        return run_install(j);
+    }
+    /* Compressed: a stream, installed as a Deflate zip member is (stream-install.md). */
+    j->seven_index = index;
+    memset(&j->member, 0, sizeof j->member);
+    j->member.index = index;
+    j->member.method = 0xFFFFU; /* no zip checkpoints (xc_zip_checkpoint_size: 0) */
+    j->member.size = size;
+    (void)xc_7z_crc(j->sevenz, index, &j->member.crc32);
+    j->member.compressed_size = xc_7z_packed_size(j->sevenz, index);
     return run_zip_install(j);
 }
 
@@ -1254,11 +1354,15 @@ xc_err xc_install(const xc_install_req *req, xc_install_result *res)
     j->src.ctx = &j->count;
     j->src.size = req->src->size;
     j->image = j->src;
-    xc_err err = req->zip ? run_zip(j) : run_install(j);
+    xc_err err = req->zip ? run_zip(j) : req->sevenz ? run_7z(j) : run_install(j);
     res->bytes_read = j->count.bytes;
     if (err != XC_OK && j->p.current != NULL) {
         (void)snprintf(res->current_file, sizeof res->current_file, "%s", j->p.current);
     }
+    xc_zip_folder_close(j->zip_folder);
+    xc_arc_folder_free(j->seven_folder);
+    xc_7z_close(j->sevenz);
+    xc_zip_listing_free(&j->folder_zl);
     xc_journal_state_free(&j->journal);
     xc_journal_zip_state_free(&j->zjournal);
     for (size_t i = 0; i < j->nzcks; i++) {

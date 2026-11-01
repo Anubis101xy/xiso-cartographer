@@ -41,6 +41,7 @@ void ui_library_open(ui_library *lib, const ui_lib_item *items, int count, int *
     lib->list.count = count;
     static const ui_lib_folder games = {"E:\\Games", NULL};
     lib->install_dir = games.path;
+    lib->apps_dir = "E:\\Apps";
     lib->folders = &games;
     lib->folder_count = 1;
     lib->settings_list.count = UI_LIB_SETTING_COUNT_;
@@ -87,6 +88,11 @@ void ui_library_set_sources(ui_library *lib, const ui_lib_source *sources, int c
 int ui_library_source(const ui_library *lib)
 {
     return lib->source_list.cur - 1;
+}
+
+bool ui_library_to_apps(const ui_library *lib)
+{
+    return lib->to_apps;
 }
 
 int ui_library_installed(const ui_library *lib)
@@ -312,13 +318,59 @@ int ui_library_rows(const ui_draw *d)
     return ui_list_rows(d, list_in);
 }
 
+/* An item that was started and isn't finished: installing carries on, or it can be deleted. */
+static bool unfinished(const ui_lib_item *it)
+{
+    return it->state == UI_LIB_UNFINISHED || it->state == UI_LIB_FAILED ||
+           it->state == UI_LIB_STOPPED;
+}
+
+/* The game the delete question is about, in GAMES or INSTALLED. */
+static const ui_lib_item *highlighted(const ui_library *lib)
+{
+    return lib->section == UI_LIB_GAMES ? &lib->items[ui_library_game(lib)]
+                                        : &lib->installed[ui_library_installed(lib)];
+}
+
 static void ask(ui_library *lib, ui_lib_action what)
 {
     if (what == UI_LIB_INSTALL) {
-        (void)snprintf(lib->message, sizeof lib->message,
-                       "Install %s to %s? It can be stopped with B and resumed later.",
-                       lib->items[ui_library_game(lib)].name, lib->install_dir);
-        lib->dialog = (ui_dialog){"INSTALL", lib->message, {"INSTALL", "CANCEL", NULL}, 0, 1};
+        const ui_lib_item *it = &lib->items[ui_library_game(lib)];
+        if (unfinished(it)) {
+            (void)snprintf(lib->message, sizeof lib->message,
+                           "%s isn't finished. Carry on where it stopped, or delete what's on "
+                           "the hard disk so far?",
+                           it->name);
+            lib->dialog =
+                (ui_dialog){"NOT FINISHED", lib->message, {"CARRY ON", "DELETE", "CANCEL"}, 0, 2};
+        } else if (it->app) {
+            (void)snprintf(lib->message, sizeof lib->message,
+                           "Install %s to %s? It looks like an app. AS A GAME puts it in %s.",
+                           it->name, lib->apps_dir, lib->install_dir);
+            lib->dialog =
+                (ui_dialog){"INSTALL", lib->message, {"INSTALL", "AS A GAME", "CANCEL"}, 0, 2};
+        } else {
+            (void)snprintf(lib->message, sizeof lib->message,
+                           "Install %s to %s? AS AN APP puts it in %s. B stops it; it carries "
+                           "on later.",
+                           it->name, lib->install_dir, lib->apps_dir);
+            lib->dialog =
+                (ui_dialog){"INSTALL", lib->message, {"INSTALL", "AS AN APP", "CANCEL"}, 0, 2};
+        }
+    } else if (what == UI_LIB_DELETE) {
+        const ui_lib_item *it = highlighted(lib);
+        if (it->state == UI_LIB_INSTALLED) {
+            (void)snprintf(lib->message, sizeof lib->message,
+                           "Delete %s? %s Saved games stay: they're in E:\\UDATA, not in its "
+                           "folder.",
+                           it->name, it->note != NULL ? it->note : "");
+        } else {
+            (void)snprintf(lib->message, sizeof lib->message,
+                           "Delete what the unfinished install of %s left? %s Installing it "
+                           "again starts over.",
+                           it->name, it->note != NULL ? it->note : "");
+        }
+        lib->dialog = (ui_dialog){"DELETE", lib->message, {"DELETE", "KEEP", NULL}, 1, 1};
     } else if (what == UI_LIB_LOGOUT) {
         lib->dialog = (ui_dialog){"LOG OUT",
                                   "Log out of archive.org on this console? Items that need the "
@@ -347,7 +399,7 @@ static void ask(ui_library *lib, ui_lib_action what)
         lib->dialog =
             lib->section == UI_LIB_GAMES
                 ? (ui_dialog){"PLAY", lib->message, {"PLAY", "INSTALL AGAIN", "CANCEL"}, 0, 2}
-                : (ui_dialog){"PLAY", lib->message, {"PLAY", "CANCEL", NULL}, 0, 1};
+                : (ui_dialog){"PLAY", lib->message, {"PLAY", "DELETE", "CANCEL"}, 0, 2};
     } else if (what == UI_LIB_NAS_USE) {
         /* Name exactly the folder that's added: the one browsed, or the highlighted one. */
         const char *where = lib->browse_title != NULL ? lib->browse_title : "";
@@ -609,7 +661,20 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
             return UI_LIB_NONE;
         }
         if (what == UI_LIB_PLAY && lib->section == UI_LIB_GAMES && c == 1) {
+            lib->to_apps = lib->items[ui_library_game(lib)].app;
             return UI_LIB_INSTALL; /* INSTALL AGAIN */
+        }
+        if ((what == UI_LIB_PLAY && lib->section != UI_LIB_GAMES && c == 1) ||
+            (what == UI_LIB_INSTALL && unfinished(&lib->items[ui_library_game(lib)]) && c == 1)) {
+            ask(lib, UI_LIB_DELETE); /* DELETE: asked once more */
+            return UI_LIB_NONE;
+        }
+        if (what == UI_LIB_INSTALL && (c == 0 || c == 1)) {
+            const ui_lib_item *it = &lib->items[ui_library_game(lib)];
+            /* INSTALL goes where the item suggests, the other button to the other folder. A
+               game that isn't finished carries on where it is (the caller knows where). */
+            lib->to_apps = unfinished(it) ? it->app : (c == 0) == it->app;
+            return UI_LIB_INSTALL;
         }
         return c == 0 && what != UI_LIB_TELL ? what : UI_LIB_NONE;
     }
@@ -643,9 +708,9 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
             (void)ui_list_input(&lib->list, b, rows);
         }
     } else if (lib->section == UI_LIB_INSTALLED_GAMES && b == UI_BTN_A) {
-        if (lib->installed_count > 0 &&
-            lib->installed[ui_library_installed(lib)].state == UI_LIB_INSTALLED) {
-            ask(lib, UI_LIB_PLAY);
+        if (lib->installed_count > 0) {
+            bool done = lib->installed[ui_library_installed(lib)].state == UI_LIB_INSTALLED;
+            ask(lib, done ? UI_LIB_PLAY : UI_LIB_DELETE);
         }
     } else if (lib->section == UI_LIB_INSTALLED_GAMES) {
         (void)ui_list_input(&lib->installed_list, b, rows);
@@ -1152,10 +1217,18 @@ static const char *hints(const ui_library *lib)
                    : "A servers and logins  Left sections  Y search  Back exit";
     }
     if (lib->section == UI_LIB_INSTALLED_GAMES) {
-        return "A play  LT RT page  Left sections  Y search  Back exit";
+        if (lib->installed_count > 0 &&
+            lib->installed[ui_library_installed(lib)].state != UI_LIB_INSTALLED) {
+            return "A delete  LT RT page  Left sections  Y search  Back exit";
+        }
+        return "A play or delete  LT RT page  Left sections  Y search  Back exit";
     }
     if (lib->section != UI_LIB_GAMES) {
         return "LT RT page  Left sections  Y search  Back exit";
+    }
+    int g = ui_library_game(lib);
+    if (g >= 0 && unfinished(&lib->items[g])) {
+        return "A carry on or delete  Y search  LT RT page  Left sections";
     }
     return lib->query[0] != '\0' ? "A install  B list all  Y search  LT RT page  Left sections"
                                  : "A install  Y search  LT RT page  Left sections  Back exit";
@@ -1246,6 +1319,8 @@ const char *ui_library_screen(const ui_library *lib)
         return "ask-kind";
     case UI_LIB_PLAY:
         return "ask-play";
+    case UI_LIB_DELETE:
+        return "ask-delete";
     case UI_LIB_NAS_USE:
         return "ask-nas-use";
     case UI_LIB_TELL:

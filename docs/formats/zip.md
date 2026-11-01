@@ -101,7 +101,8 @@ The **central directory** is authoritative: names, methods, sizes and CRC-32s co
 ## 5. Choosing the image
 
 1. The image is the one entry that isn't a directory and whose name ends in `.iso` or `.xiso`, compared without case for ASCII letters. A `.xiso.iso` name ends in `.iso`.
-2. No such entry, or more than one: the install is refused (`XC_ERR_ZIP_MEMBER`), and every entry is listed so the user can see why. A map syntax for choosing one of several may come later (ADR 0009 §3).
+2. More than one: the install is refused (`XC_ERR_ZIP_MEMBER`), and every entry is listed so the user can see why. A map syntax for choosing one of several may come later (ADR 0009 §3).
+3. None: the zip's game or app folder is installed, the folder of its shallowest `default.xbe`, its members read as the install asks ([folder-image.md §7](folder-image.md#7-archives), ADR 0018 decision 9). Without a `default.xbe` either, the install is refused (`XC_ERR_ZIP_MEMBER`).
 
 ## 6. The chosen member
 

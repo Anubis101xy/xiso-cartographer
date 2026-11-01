@@ -67,6 +67,12 @@ bool xc_nx_exists(const char *path);
 /* Creates `path` and any missing parents. */
 bool xc_nx_mkdirs(const char *path);
 
+/* Deletes the folder `path` and everything in it, read-only files too: a game's install
+   folder the user asked to delete. Folders more than 40 levels deep, or a path over 255
+   bytes, give XC_ERR_LIMIT; a file that can't be deleted, XC_ERR_IO (what could be deleted
+   is gone). The caller checks that `path` is one of its install folders. */
+xc_err xc_nx_remove_tree(const char *path);
+
 /* Replaces the file `path` with data[0, len) all at once (docs/formats/login.md §5): writes
    `path`.tmp, flushes it, then renames it over `path`. A power cut leaves the old file or the
    new one, and at worst a stale .tmp. The .tmp is wiped and deleted if anything fails. */
