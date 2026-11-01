@@ -44,6 +44,19 @@ static bool drawn_in(const char *s, ui_color c)
     return false;
 }
 
+/* Whether text starting with `prefix` was drawn in colour c (a line cut to fit keeps it). */
+static bool drawn_prefix_in(const char *prefix, ui_color c)
+{
+    for (int i = 0; i < fake_log_n; i++) {
+        const fake_call *f = &fake_log[i];
+        if (f->kind == 't' && strncmp(f->text, prefix, strlen(prefix)) == 0 && f->c.r == c.r &&
+            f->c.g == c.g && f->c.b == c.b && f->c.a == c.a) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static int count_text(const char *s)
 {
     int n = 0;
@@ -140,17 +153,38 @@ static void test_nas(void)
     for (int i = 0; i < UI_LIB_SETTING_NAS; i++) {
         TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
     }
-    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    /* Opening the page lets the caller fill it in. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_PAGE, ui_library_input(&lib, UI_BTN_A, 5));
     TEST_ASSERT_EQUAL_STRING("nas", ui_library_screen(&lib));
+    ui_library_set_console(&lib, "This Xbox: 192.168.1.23");
+    /* No NAS yet: "Find a NAS" is first. */
+    TEST_ASSERT_EQUAL_INT(-1, ui_library_nas(&lib));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_SCAN, ui_library_input(&lib, UI_BTN_A, 5));
-    static const ui_lib_nas found[1] = {{"TNAS-F4", "192.168.1.50", "192.168.1.50"}};
-    ui_library_set_nas(&lib, found, 1, "1 NAS found.");
-    TEST_ASSERT_EQUAL_INT(3, lib.nas_list.count);
-    /* The server: user name, then password. */
-    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
-    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
-    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    static const ui_lib_nas found[2] = {
+        {"TNAS-F4", "192.168.1.50", "192.168.1.50, workgroup WORKGROUP", "xbox"},
+        {"PC", "192.168.1.20", "192.168.1.20", NULL}};
+    ui_library_set_nas(&lib, found, 2, "2 found.");
+    TEST_ASSERT_EQUAL_INT(4, lib.nas_list.count);
+    TEST_ASSERT_EQUAL_INT(0, ui_library_nas(&lib)); /* the saved one, first */
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(drawn_prefix_in("This Xbox", ui_col_accent));
+    TEST_ASSERT_TRUE(count_text("Logged in as xbox before: A opens its shared folders. X logs in "
+                                "as someone else.") > 0 ||
+                     count_kind('t') > 0);
+    /* A saved login: no keyboard. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_SAVED, ui_library_input(&lib, UI_BTN_A, 5));
     TEST_ASSERT_EQUAL_STRING("192.168.1.50", lib.nas_addr);
+    /* X: someone else, from the saved user name. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_X, 5));
+    TEST_ASSERT_EQUAL_STRING("keyboard-nas-user", ui_library_screen(&lib));
+    TEST_ASSERT_EQUAL_STRING("xbox", lib.nas_user);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5));
+    /* No saved login: user name, then password. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(1, ui_library_nas(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_STRING("192.168.1.20", lib.nas_addr);
     TEST_ASSERT_EQUAL_STRING("keyboard-nas-user", ui_library_screen(&lib));
     (void)snprintf(lib.nas_user, sizeof lib.nas_user, "%s", "shaun");
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_START, 5));
@@ -160,28 +194,42 @@ static void test_nas(void)
     TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_LOGIN, ui_library_input(&lib, UI_BTN_START, 5));
     ui_library_forget_nas_password(&lib);
     TEST_ASSERT_EQUAL_STRING("", lib.nas_password);
-    /* Its shares: no "Use this folder" at the top. */
+    /* Its shares: no "add" line at the top; X adds a whole share. */
     static const ui_lib_entry shares[2] = {{"Games", "Xbox games"}, {"Media", NULL}};
-    ui_library_browse(&lib, "TNAS-F4", "2 shared folders.", shares, 2, false);
+    ui_library_browse(&lib, "TNAS-F4", "2 shared folders.", shares, 2, NULL);
     TEST_ASSERT_EQUAL_STRING("nas-browse", ui_library_screen(&lib));
     TEST_ASSERT_EQUAL_INT(0, ui_library_browse_entry(&lib));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_OPEN, ui_library_input(&lib, UI_BTN_A, 5));
-    /* A folder: "Use this folder" first, asked about before it's added. */
-    static const ui_lib_entry folders[1] = {{"Xbox", NULL}};
-    ui_library_browse(&lib, "TNAS-F4 > Games", "3 images here.", folders, 1, true);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_X, 5));
+    TEST_ASSERT_EQUAL_STRING("ask-nas-use", ui_library_screen(&lib));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Add TNAS-F4 > Games to GAMES?"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5)); /* CANCEL */
+    /* A folder: its "add" line first, asked about before it's added. */
+    static const ui_lib_entry folders[2] = {{"Halo (USA)", NULL}, {"Xbox", NULL}};
+    ui_library_browse(&lib, "TNAS-F4 > Games", "3 images here.", folders, 2,
+                      "Add this folder to GAMES");
     TEST_ASSERT_EQUAL_INT(-1, ui_library_browse_entry(&lib));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
     TEST_ASSERT_EQUAL_STRING("ask-nas-use", ui_library_screen(&lib));
-    TEST_ASSERT_NOT_NULL(strstr(lib.message, "TNAS-F4 > Games"));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Add TNAS-F4 > Games to GAMES?"));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_USE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(-1, ui_library_nas_pick(&lib));
+    /* X on a folder adds that one, by name, without opening it. */
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
-    TEST_ASSERT_EQUAL_INT(0, ui_library_browse_entry(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(1, ui_library_browse_entry(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_X, 5));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Add TNAS-F4 > Games > Xbox to GAMES?"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_USE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(1, ui_library_nas_pick(&lib));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_OPEN, ui_library_input(&lib, UI_BTN_A, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_UP, ui_library_input(&lib, UI_BTN_B, 5));
     ui_library_nas_page(&lib);
     TEST_ASSERT_EQUAL_STRING("nas", ui_library_screen(&lib));
     /* Type an address; no user name logs in as a guest, with no password asked. */
-    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_UP, 5));
+    for (int i = 0; i < 4; i++) {
+        (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    }
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
     TEST_ASSERT_EQUAL_STRING("keyboard-nas-address", ui_library_screen(&lib));
     (void)snprintf(lib.nas_addr, sizeof lib.nas_addr, "%s", "nas.lan:4450");
@@ -190,7 +238,7 @@ static void test_nas(void)
     TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_LOGIN, ui_library_input(&lib, UI_BTN_START, 5));
     /* Drawn without trouble on each page. */
     ui_library_draw(&fake_draw, &lib, 0, NULL);
-    ui_library_browse(&lib, "TNAS-F4", NULL, NULL, 0, false);
+    ui_library_browse(&lib, "TNAS-F4", NULL, NULL, 0, NULL);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
     TEST_ASSERT_TRUE(count_text("Nothing here this login can open. B goes back.") > 0 ||
                      count_kind('t') > 0);

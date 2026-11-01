@@ -444,14 +444,18 @@ The app's logo as its XBE's title image ([xbe-title-image.md](formats/xbe-title-
 
 | Step | How | Pass |
 |---|---|---|
-| 1 | SETTINGS > NAS > Scan the network | The NAS is listed by name and address within ~15 s |
-| 2 | Type an address: the NAS's IP | Asks for the user name |
-| 3 | Log in with the console's NAS user; then a wrong password | Shares listed; "The NAS refused the user name or password" |
-| 4 | Browse to the games folder, Use this folder | `E:\Apps\xcat\credentials` has the section (no password), `E:\xcat\map.txt` the `@smb` line; GAMES lists the folder's images and game folders |
-| 5 | Install an `.iso`, a `.zip` and a game folder | Each verified; `install.log` shows MB/s and 0 reconnections |
-| 6 | Pull the network cable mid-install for 10 s, put it back, RETRY | Resumes; the result is verified |
-| 7 | INSTALLED > A > PLAY | The game starts |
-| 8 | Switch the NAS off, start the app | The list loads (3 s per `@smb` folder), installing from it says the NAS doesn't answer |
+| 1 | SETTINGS > NAS | `This Xbox: <its address>` at the bottom of the panel |
+| 2 | Find a NAS on the network | The NAS is listed at the top by name and address within ~15 s |
+| 3 | Type a NAS address: the NAS's IP | Asks for the user name |
+| 4 | Log in with the console's NAS user; then, with X, a wrong password | Shares listed, "Login saved."; `E:\Apps\xcat\credentials` has the section (no password); "The NAS refused the user name or password" |
+| 5 | B to the NAS page, then A on the NAS | Its shares, with no keyboard |
+| 6 | Open shares and folders, check each opens the one highlighted; X on one, ADD | The question names that folder; `E:\xcat\map.txt` has its `@smb` line; GAMES lists its images and game folders, and their details name the folder they're in |
+| 7 | Install an `.iso`, a `.zip` and a game folder | Each verified; `install.log` shows MB/s and 0 reconnections |
+| 8 | Pull the network cable mid-install for 10 s, put it back, RETRY | Resumes; the result is verified |
+| 9 | INSTALLED > A > PLAY | The game starts |
+| 10 | Switch the NAS off, start the app | The list loads (3 s per `@smb` folder), installing from it says the NAS doesn't answer |
+
+First run on the owner's console (0.10.0, 2026-11-01): scan, login, browse and install worked; the login wasn't kept unless a folder was added, a folder picked in the list could open another (the list was sorted for display, the names it opened weren't), and the menus didn't say which folder was meant. Fixed in 0.10.1; steps 1, 4–6 check it.
 
 ## FATX probe (M2)
 

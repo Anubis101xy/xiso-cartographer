@@ -65,13 +65,17 @@ typedef enum ui_lib_action {
     UI_LIB_SOURCE_KIND,   /* (internal: the dialog asking what kind of source to add) */
     UI_LIB_PLAY,          /* start the highlighted installed game: in GAMES ui_library_game(),
                              in INSTALLED ui_library_installed() (lib->section says which) */
+    UI_LIB_NAS_PAGE,      /* the NAS page opened: give it its NASes (ui_library_set_nas) and
+                             say where the console is (ui_library_set_console) */
     UI_LIB_NAS_SCAN,      /* scan the network for a NAS, then ui_library_set_nas */
     UI_LIB_NAS_LOGIN,     /* log in to lib->nas_addr as lib->nas_user ("": a guest) with
                              lib->nas_password and list its shares (ui_library_browse); then
                              ui_library_forget_nas_password */
+    UI_LIB_NAS_SAVED,     /* log in to lib->nas_addr with its saved login and list its shares */
     UI_LIB_NAS_OPEN,      /* open browse entry ui_library_browse_entry() */
     UI_LIB_NAS_UP,        /* B while browsing: one level up (the shares, then the NAS page) */
-    UI_LIB_NAS_USE,       /* add the folder being browsed to the map: the user said yes */
+    UI_LIB_NAS_USE,       /* add a NAS folder to the map, the user said yes: the one browsed
+                             (ui_library_nas_pick() -1), or browse entry ui_library_nas_pick() */
 } ui_lib_action;
 
 /* What kind of source to add to the map. */
@@ -109,8 +113,8 @@ typedef enum ui_lib_page {
     UI_LIB_PAGE_FOLDERS, /* the folders to install to, then "Other folder" */
     UI_LIB_PAGE_LOGINS,  /* Authentication's servers */
     UI_LIB_PAGE_SOURCES, /* "Add source", then the map's sources */
-    UI_LIB_PAGE_NAS,     /* "Scan the network", "Type an address", then what the scan found */
-    UI_LIB_PAGE_BROWSE,  /* a NAS's shares, or a folder's folders, maybe after "Use this folder" */
+    UI_LIB_PAGE_NAS,     /* the NASes (saved, then found), "Find a NAS", "Type a NAS address" */
+    UI_LIB_PAGE_BROWSE,  /* a NAS's shares, or a folder's folders after "Add this folder" */
 } ui_lib_page;
 
 /* A server on the Authentication page, as the caller describes it. */
@@ -129,11 +133,12 @@ typedef struct ui_lib_source {
     const char *about; /* wrapped below it: the whole line, and any problem; may be NULL */
 } ui_lib_source;
 
-/* A NAS the scan found, as the caller describes it. */
+/* A NAS on the NAS page, saved or found by a scan, as the caller describes it. */
 typedef struct ui_lib_nas {
     const char *name;    /* the list's line: its NetBIOS name, else its address */
     const char *address; /* what logging in connects to: "192.168.1.50" or "nas:4450" */
     const char *note;    /* under it, small; may be NULL */
+    const char *login;   /* the saved login's user name ("a guest" for one), or NULL: none */
 } ui_lib_nas;
 
 /* A share or folder while browsing a NAS, as the caller describes it. */
@@ -186,19 +191,21 @@ typedef struct ui_library {
     char add_url[UI_LIB_URL_MAX];
     char add_key[UI_LIB_KEY_MAX];
     char folder[UI_LIB_FOLDER_MAX]; /* UI_LIB_FOLDER's, and the keyboard's for "Other folder" */
-    const ui_lib_nas *nas;          /* UI_LIB_PAGE_NAS: what the scan found, the caller's */
+    const ui_lib_nas *nas;          /* UI_LIB_PAGE_NAS: saved and found NASes, the caller's */
     int nas_count;
-    const char *nas_status; /* how the last scan went, the caller's; may be NULL */
-    ui_list nas_list;       /* over "Scan the network", "Type an address", then nas */
+    const char *nas_status;   /* how the last scan went, the caller's; may be NULL */
+    const char *console_line; /* "This Xbox: 192.168.1.23", the caller's; may be NULL */
+    ui_list nas_list;         /* over nas, then "Find a NAS", "Type a NAS address" */
     char nas_addr[UI_LIB_NAS_ADDR_MAX];
     char nas_user[UI_LIB_NAS_USER_MAX];
     char nas_password[UI_LIB_PASSWORD_MAX]; /* wiped when the login is done or cancelled */
     const ui_lib_entry *browse;             /* UI_LIB_PAGE_BROWSE: the caller's */
     int browse_count;
-    bool browse_use;          /* "Use this folder" comes first */
+    const char *browse_use;   /* the line that adds the folder browsed, first; NULL: none */
     const char *browse_title; /* where we are, the caller's */
     const char *browse_about; /* what's here, the caller's; may be NULL */
     ui_list browse_list;
+    int nas_pick; /* UI_LIB_NAS_USE's folder: -1 the one browsed, else a browse entry */
     const ui_lib_item *installed; /* INSTALLED: the folders in install_dir */
     int installed_count;
     ui_list installed_list;
@@ -247,17 +254,27 @@ int ui_library_source(const ui_library *lib);
 /* The index in the INSTALLED list of the highlighted folder. */
 int ui_library_installed(const ui_library *lib);
 
-/* Gives the NAS page what a scan found (the strings stay the caller's), and a line saying how
-   the scan went (may be NULL). */
+/* Gives the NAS page its NASes, saved ones first (the strings stay the caller's), with the
+   first highlighted, and a line saying how the last scan went (may be NULL). */
 void ui_library_set_nas(ui_library *lib, const ui_lib_nas *nas, int count, const char *status);
 
-/* Shows a NAS's shares, or a folder's folders, after "Use this folder" if `can_use` (the
-   strings stay the caller's), with the first line highlighted. */
-void ui_library_browse(ui_library *lib, const char *title, const char *about,
-                       const ui_lib_entry *entries, int count, bool can_use);
+/* Says where the console is on the network, for the NAS pages ("This Xbox: 192.168.1.23");
+   the string stays the caller's. NULL: nothing is said. */
+void ui_library_set_console(ui_library *lib, const char *line);
 
-/* The index in the browse entries of the highlighted line, or -1 for "Use this folder". */
+/* The index in nas of the NAS highlighted on the NAS page, or -1 for another line. */
+int ui_library_nas(const ui_library *lib);
+
+/* Shows a NAS's shares, or a folder's folders, with the first line highlighted: first the
+   line `use` ("Add this folder to GAMES") if it isn't NULL. The strings stay the caller's. */
+void ui_library_browse(ui_library *lib, const char *title, const char *about,
+                       const ui_lib_entry *entries, int count, const char *use);
+
+/* The index in the browse entries of the highlighted line, or -1 for the `use` line. */
 int ui_library_browse_entry(const ui_library *lib);
+
+/* UI_LIB_NAS_USE's folder: -1 for the one browsed, else the index of a browse entry. */
+int ui_library_nas_pick(const ui_library *lib);
 
 /* Back from browsing to the NAS page. */
 void ui_library_nas_page(ui_library *lib);
@@ -300,13 +317,14 @@ int ui_library_rows(const ui_draw *d);
    the map's lines. A on "Add source" asks what kind (ARCHIVE.ORG, MAP or IMAGE; B closes it),
    then opens the keyboard for the identifier or URL, and for an image the title ID too; DONE
    gives UI_LIB_ADD_SOURCE, and B there adds nothing (what was typed stays for the next try).
-   A on a line asks before UI_LIB_REMOVE_SOURCE. A on NAS lists "Scan the network" (A gives
-   UI_LIB_NAS_SCAN), "Type an address" (the keyboard), then what the scan found; after an
-   address, the keyboard asks the user name (DONE on none logs in as a guest) and the password
-   (dots only), and gives UI_LIB_NAS_LOGIN; B wipes the password. While browsing, A on a line
-   gives UI_LIB_NAS_OPEN, A on "Use this folder" asks before UI_LIB_NAS_USE, and B gives
-   UI_LIB_NAS_UP. A on an installed game, in GAMES or INSTALLED, asks before UI_LIB_PLAY. In a
-   dialog or the keyboard, their buttons. */
+   A on a line asks before UI_LIB_REMOVE_SOURCE. A on NAS gives UI_LIB_NAS_PAGE and lists the
+   NASes, then "Find a NAS on the network" (A gives UI_LIB_NAS_SCAN) and "Type a NAS address"
+   (the keyboard). A on a NAS with a saved login gives UI_LIB_NAS_SAVED; A on one without, X
+   on any, or DONE on an address, asks the user name (DONE on none logs in as a guest), then
+   the password (dots only), and gives UI_LIB_NAS_LOGIN; B wipes the password. While browsing,
+   A on a line gives UI_LIB_NAS_OPEN, A on the `use` line or X on a line asks before
+   UI_LIB_NAS_USE, and B gives UI_LIB_NAS_UP. A on an installed game, in GAMES or INSTALLED, asks
+   before UI_LIB_PLAY. In a dialog or the keyboard, their buttons. */
 ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows);
 
 /* The name of what the screen shows, for the UI script (docs/formats/ui-script.md §6): an open

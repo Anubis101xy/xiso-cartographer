@@ -24,21 +24,26 @@ The console copies the game to its own drive (E:\Games by default), then starts 
 ## 2. On the console
 
 1. Copy the `xiso-cartographer` folder from the zip to the console, for example to `E:\Apps\xcat\`, and keep `fonts\` and `ui\` next to `default.xbe`. Start it from your dashboard.
-2. **SETTINGS > NAS > Scan the network.** It asks every address of the console's network for a file sharing service, about ten seconds on a home network, and lists what it found by name (`TNAS-...`) and address. If your NAS isn't listed, use **Type an address** with its IP address.
-3. Pick the NAS. Enter the user name (`xbox`), then its password, on the on-screen keyboard. An empty user name logs in as a guest. The password is only used to compute the hash and is wiped.
-4. **Browse:** the NAS's shares are listed. A opens one, B goes up. Go to the folder with your games, then pick **Use this folder** at the top and confirm with ADD.
-5. The console writes the login (`E:\Apps\xcat\credentials`) and an `@smb` line in your map (`E:\xcat\map.txt`), then lists the games: they're in **GAMES** now.
-6. Pick a game and install it. A progress screen shows the copy, then it reads every file back to check it. If the network drops, it resumes where it stopped next time you install the same game.
-7. Installed games: **A > PLAY** starts the game. In GAMES an installed game also offers INSTALL AGAIN.
+2. **SETTINGS > NAS.** The network starts, and the bottom of the right-hand panel shows the console's own address (`This Xbox: 192.168.1.23`), so you can see it's on the same network as the NAS. NASes you've logged in to before are listed first.
+3. **Find a NAS on the network** asks every address of the console's network for file sharing, about ten seconds on a home network, and lists what it found at the top, by name (`TNAS-...`) and address. If your NAS isn't listed, use **Type a NAS address** with its IP address.
+4. Pick the NAS and press A. The first time, enter the user name (`xbox`), then its password, on the on-screen keyboard; an empty user name logs in as a guest. As soon as the NAS accepts it, the login is saved (only the password's hash, in `E:\Apps\xcat\credentials`): next time, A on the NAS goes straight to its shared folders. **X** on a NAS logs in as someone else, or again after a password change.
+5. **Browse:** A opens a shared folder or a folder, B goes up. The right-hand panel always describes the highlighted line. Two ways to add a folder:
+   - open it, then pick **Add this folder to GAMES** at the top (it says **Add this game to GAMES** if the folder is itself a game, with a `default.xbe`); or
+   - highlight it and press **X**, without opening it (on the first level, X adds a whole shared folder).
 
-You can add more than one folder (or more than one NAS): repeat 2–4.
+   The question that follows names exactly the folder that will be added; ADD confirms.
+6. The console writes an `@smb` line in your map (`E:\xcat\map.txt`), lists the games and takes you to **GAMES**. Each game's details say where on the NAS it is.
+7. Pick a game and install it. A progress screen shows the copy, then it reads every file back to check it. If the network drops, it resumes where it stopped next time you install the same game.
+8. Installed games: **A > PLAY** starts the game. In GAMES an installed game also offers INSTALL AGAIN.
+
+You can add more than one folder (or more than one NAS): repeat 2–5.
 
 ## 3. When it doesn't work
 
 | What you see | What to check |
 |---|---|
-| The scan finds nothing | The console has an IP address (the dashboard's network settings), the NAS is on the same network, SMB is on. Type the address instead. |
-| "The NAS refused the user name or password" | The user name and password; whether the account is enabled. For a domain user, type `DOMAIN\user`. |
+| The scan finds nothing | `This Xbox:` at the bottom of the NAS page shows an address on the same network as the NAS (the same first three numbers on a home network). If it says the Xbox isn't on the network, check the cable and the dashboard's network settings. SMB is on. Type the address instead. |
+| "The NAS refused the user name or password", or "refused the saved login" | The user name and password; whether the account is enabled. For a domain user, type `DOMAIN\user`. X on the NAS types them again. |
 | "The NAS has no shared folder of that name" | The share was renamed or removed: add the folder again. |
 | "This login may not open that folder or file" | The console's user can't read that share or folder: give it Read only in the share's permissions. |
 | "The NAS (SMB) refused or failed the request" | SMB2 or SMB3 is allowed (File Services > SMB > Advanced). The log has the NAS's own words. |

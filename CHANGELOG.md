@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-01
+
+After the first run on a console.
+
+### Fixed
+
+- SETTINGS > NAS: opening a share or folder opened the one at that place in the NAS's own order, not the one highlighted (the list is sorted for display), so the folder shown and added could differ from the one picked.
+- The NAS login is saved as soon as the NAS accepts it, not only when a folder is added; a NAS with a saved login opens with A, no typing (X: another login). A saved login the NAS refuses says so.
+
+### Changed
+
+- SETTINGS > NAS shows the console's address (`This Xbox: 192.168.1.23`, or that it isn't on the network), and lists the NASes with a saved login, and those the map uses, before "Find a NAS on the network" and "Type a NAS address".
+- Browsing a NAS: "Add this folder to GAMES" (or "Add this game to GAMES" in a game folder) instead of "Use this folder"; X adds the highlighted folder, or a whole shared folder, without opening it; the question names exactly the folder added; the panel describes the highlighted line, and counts images and folders; adding a folder goes to GAMES.
+- A NAS game's details name the folder it's in on the NAS ("From the NAS 192.168.1.50: Games > Xbox").
+
 ## [0.10.0] - 2026-10-30
 
 Games from a NAS: install from a shared folder over SMB, found and logged in to on the console, and start installed games from the app (ADR 0018).

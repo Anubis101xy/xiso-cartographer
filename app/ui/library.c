@@ -49,7 +49,8 @@ void ui_library_open(ui_library *lib, const ui_lib_item *items, int count, int *
     lib->host_count = 1;
     lib->host_list.count = 1;
     lib->source_list.count = 1; /* "Add source" */
-    lib->nas_list.count = 2;    /* "Scan the network", "Type an address" */
+    lib->nas_list.count = 2;    /* "Find a NAS on the network", "Type a NAS address" */
+    lib->nas_pick = -1;
 }
 
 void ui_library_set_items(ui_library *lib, const ui_lib_item *items, int count, int *shown)
@@ -98,24 +99,50 @@ void ui_library_set_nas(ui_library *lib, const ui_lib_nas *nas, int count, const
     lib->nas = nas;
     lib->nas_count = count;
     lib->nas_status = status;
-    keep_place(&lib->nas_list, count + 2);
+    lib->nas_list = (ui_list){count + 2, 0, 0}; /* the first NAS, else "Find a NAS" */
+}
+
+void ui_library_set_console(ui_library *lib, const char *line)
+{
+    lib->console_line = line;
+}
+
+/* The NAS page's lines after the NASes. */
+#define NAS_FIND (-1)
+#define NAS_TYPE (-2)
+
+/* What line `cur` of the NAS page is: a NAS (its index), NAS_FIND or NAS_TYPE. */
+static int nas_line(const ui_library *lib, int cur)
+{
+    return cur < lib->nas_count ? cur : cur == lib->nas_count ? NAS_FIND : NAS_TYPE;
+}
+
+int ui_library_nas(const ui_library *lib)
+{
+    int n = nas_line(lib, lib->nas_list.cur);
+    return n >= 0 ? n : -1;
 }
 
 void ui_library_browse(ui_library *lib, const char *title, const char *about,
-                       const ui_lib_entry *entries, int count, bool can_use)
+                       const ui_lib_entry *entries, int count, const char *use)
 {
     lib->browse = entries;
     lib->browse_count = count;
-    lib->browse_use = can_use;
+    lib->browse_use = use;
     lib->browse_title = title;
     lib->browse_about = about;
-    lib->browse_list = (ui_list){count + (can_use ? 1 : 0), 0, 0};
+    lib->browse_list = (ui_list){count + (use != NULL ? 1 : 0), 0, 0};
     lib->page = UI_LIB_PAGE_BROWSE;
 }
 
 int ui_library_browse_entry(const ui_library *lib)
 {
-    return lib->browse_list.cur - (lib->browse_use ? 1 : 0);
+    return lib->browse_list.cur - (lib->browse_use != NULL ? 1 : 0);
+}
+
+int ui_library_nas_pick(const ui_library *lib)
+{
+    return lib->nas_pick;
 }
 
 void ui_library_nas_page(ui_library *lib)
@@ -322,10 +349,20 @@ static void ask(ui_library *lib, ui_lib_action what)
                 ? (ui_dialog){"PLAY", lib->message, {"PLAY", "INSTALL AGAIN", "CANCEL"}, 0, 2}
                 : (ui_dialog){"PLAY", lib->message, {"PLAY", "CANCEL", NULL}, 0, 1};
     } else if (what == UI_LIB_NAS_USE) {
-        (void)snprintf(lib->message, sizeof lib->message,
-                       "Add %s to your games? Its images, and those in the folders inside it, "
-                       "are listed in GAMES.",
-                       lib->browse_title != NULL ? lib->browse_title : "this folder");
+        /* Name exactly the folder that's added: the one browsed, or the highlighted one. */
+        const char *where = lib->browse_title != NULL ? lib->browse_title : "";
+        int e = lib->nas_pick;
+        if (e >= 0 && e < lib->browse_count) {
+            (void)snprintf(lib->message, sizeof lib->message,
+                           "Add %s%s%s to GAMES? Its images and game folders, and those one "
+                           "folder down, are listed there.",
+                           where, where[0] != '\0' ? " > " : "", lib->browse[e].name);
+        } else {
+            (void)snprintf(lib->message, sizeof lib->message,
+                           "Add %s to GAMES? Its images and game folders, and those one folder "
+                           "down, are listed there.",
+                           where[0] != '\0' ? where : "this folder");
+        }
         lib->dialog = (ui_dialog){"ADD NAS FOLDER", lib->message, {"ADD", "CANCEL", NULL}, 0, 1};
     } else if (what == UI_LIB_SOURCE_KIND) {
         /* Three choices and no CANCEL: B gives 3, a choice past them, which adds nothing. */
@@ -470,15 +507,23 @@ static void source_kind(ui_library *lib, int c)
 static ui_lib_action settings_input(ui_library *lib, ui_button b, int rows)
 {
     if (lib->page == UI_LIB_PAGE_NAS) {
-        int cur = lib->nas_list.cur;
+        int n = nas_line(lib, lib->nas_list.cur);
         if (b == UI_BTN_B) {
             lib->page = UI_LIB_PAGE_NONE;
-        } else if (b == UI_BTN_A && cur == 0) {
+        } else if (b == UI_BTN_A && n == NAS_FIND) {
             return UI_LIB_NAS_SCAN;
-        } else if (b == UI_BTN_A && cur == 1) {
+        } else if (b == UI_BTN_A && n == NAS_TYPE) {
             open_kbd(lib, UI_LIB_TYPING_NAS_ADDRESS);
-        } else if (b == UI_BTN_A && cur - 2 < lib->nas_count) {
-            (void)snprintf(lib->nas_addr, sizeof lib->nas_addr, "%s", lib->nas[cur - 2].address);
+        } else if ((b == UI_BTN_A || b == UI_BTN_X) && n >= 0) {
+            const ui_lib_nas *nas = &lib->nas[n];
+            (void)snprintf(lib->nas_addr, sizeof lib->nas_addr, "%s", nas->address);
+            if (b == UI_BTN_A && nas->login != NULL) {
+                return UI_LIB_NAS_SAVED;
+            }
+            /* Someone else (X), or no login yet: the user name, the saved one to start from. */
+            (void)snprintf(lib->nas_user, sizeof lib->nas_user, "%s",
+                           nas->login != NULL && strcmp(nas->login, "a guest") != 0 ? nas->login
+                                                                                    : "");
             open_kbd(lib, UI_LIB_TYPING_NAS_USER);
         } else {
             (void)ui_list_input(&lib->nas_list, b, rows);
@@ -486,15 +531,22 @@ static ui_lib_action settings_input(ui_library *lib, ui_button b, int rows)
         return UI_LIB_NONE;
     }
     if (lib->page == UI_LIB_PAGE_BROWSE) {
+        int e = ui_library_browse_entry(lib);
         if (b == UI_BTN_B) {
             return UI_LIB_NAS_UP;
         }
+        if (b == UI_BTN_A && lib->browse_list.count > 0 && e < 0) {
+            lib->nas_pick = -1;
+            ask(lib, UI_LIB_NAS_USE);
+            return UI_LIB_NONE;
+        }
         if (b == UI_BTN_A && lib->browse_list.count > 0) {
-            if (ui_library_browse_entry(lib) < 0) {
-                ask(lib, UI_LIB_NAS_USE);
-                return UI_LIB_NONE;
-            }
             return UI_LIB_NAS_OPEN;
+        }
+        if (b == UI_BTN_X && e >= 0 && e < lib->browse_count) {
+            lib->nas_pick = e; /* add the highlighted folder without opening it */
+            ask(lib, UI_LIB_NAS_USE);
+            return UI_LIB_NONE;
         }
         (void)ui_list_input(&lib->browse_list, b, rows);
         return UI_LIB_NONE;
@@ -536,6 +588,7 @@ static ui_lib_action settings_input(ui_library *lib, ui_button b, int rows)
         lib->page = UI_LIB_PAGE_SOURCES;
     } else if (lib->settings_list.cur == UI_LIB_SETTING_NAS) {
         lib->page = UI_LIB_PAGE_NAS;
+        return UI_LIB_NAS_PAGE;
     } else {
         lib->page = UI_LIB_PAGE_LOGINS;
     }
@@ -811,22 +864,26 @@ static void draw_sources(const ui_draw *d, const ui_library *lib)
 static const char *nas_name(void *ctx, int i)
 {
     const ui_library *lib = ctx;
-    return i == 0 ? "Scan the network" : i == 1 ? "Type an address" : lib->nas[i - 2].name;
+    int n = nas_line(lib, i);
+    return n == NAS_FIND   ? "Find a NAS on the network"
+           : n == NAS_TYPE ? "Type a NAS address"
+                           : lib->nas[n].name;
 }
 
 static const char *browse_name(void *ctx, int i)
 {
     const ui_library *lib = ctx;
-    if (lib->browse_use) {
+    if (lib->browse_use != NULL) {
         if (i == 0) {
-            return "Use this folder";
+            return lib->browse_use;
         }
         i--;
     }
     return lib->browse[i].name;
 }
 
-/* NAS's details: the line in SETTINGS, the NAS page's line, or where browsing is. */
+/* NAS's details: the line in SETTINGS, the NAS page's line, or where browsing is. The last
+   line says where the console is on the network, when the caller has said. */
 static void draw_nas(const ui_draw *d, const ui_library *lib)
 {
     int x = detail.x + PAD + 4;
@@ -835,42 +892,69 @@ static void draw_nas(const ui_draw *d, const ui_library *lib)
     int bottom = detail.y + detail.h - PAD;
     int bh = d->line_height(d->ctx, UI_FONT_BOLD);
     int sh = d->line_height(d->ctx, UI_FONT_SMALL);
+    if (lib->console_line != NULL && lib->console_line[0] != '\0') {
+        bottom -= sh;
+        (void)ui_text_fit(d, UI_FONT_SMALL, x, bottom, w, ui_col_accent, lib->console_line);
+        bottom -= 6;
+    }
     const char *title = "NAS";
     const char *note = NULL;
-    const char *text = "Your NAS's shared folders: find it, log in, and choose the folder your "
-                       "games are in. A starts.";
-    const char *more = "Its images, and those in the folders inside it, are listed in GAMES and "
-                       "install from it over the network.";
+    const char *text = "Games on your NAS: find it on the network, log in once, and add the "
+                       "folder your games are in. A starts.";
+    const char *more = "Its images (.iso, .xiso, .zip) and game folders (with a default.xbe) "
+                       "are listed in GAMES and install from it over the network.";
+    char line[160];
     if (lib->page == UI_LIB_PAGE_NAS) {
-        int cur = lib->nas_list.cur;
-        if (cur == 0) {
-            title = "Scan the network";
-            text = "Asks every address of this network for a shared folder service (SMB), a few "
-                   "at a time. It takes about ten seconds.";
+        int n = nas_line(lib, lib->nas_list.cur);
+        if (n == NAS_FIND) {
+            title = "Find a NAS on the network";
+            text = "Asks every address of this network for file sharing (SMB), a few at a time. "
+                   "It takes about ten seconds.";
             more = lib->nas_status;
-        } else if (cur == 1) {
-            title = "Type an address";
+        } else if (n == NAS_TYPE) {
+            title = "Type a NAS address";
             text = "The NAS's IP address, like 192.168.1.50, as its settings or your router "
                    "show it. Add :port for another port than 445.";
-            more = "Then its user name and password.";
+            more = "Then its user name and password. The login is saved for next time.";
         } else {
-            const ui_lib_nas *n = &lib->nas[cur - 2];
-            title = n->name;
-            note = n->note;
-            text = "A logs in: its user name, then its password. No user name logs in as a "
-                   "guest.";
-            more = "The password isn't kept: only its NT hash, which the NAS checks logins "
-                   "with, in E:\\Apps\\xcat\\credentials.";
+            const ui_lib_nas *nas = &lib->nas[n];
+            title = nas->name;
+            note = nas->note;
+            if (nas->login != NULL) {
+                (void)snprintf(line, sizeof line,
+                               "Logged in as %s before: A opens its shared folders. X logs in "
+                               "as someone else.",
+                               nas->login);
+                text = line;
+            } else {
+                text = "A logs in: its user name, then its password. No user name logs in as a "
+                       "guest. The login is saved, so you type it once.";
+            }
+            more = "Only the password's NT hash is kept, in E:\\Apps\\xcat\\credentials. "
+                   "SETTINGS > Authentication removes it.";
         }
     } else if (lib->page == UI_LIB_PAGE_BROWSE) {
-        title = lib->browse_title != NULL ? lib->browse_title : "";
-        text = lib->browse_about;
         int e = ui_library_browse_entry(lib);
-        more = e < 0 ? "A adds this folder: its images and those of the folders in it."
-               : lib->browse_count > 0 ? "A opens it. B goes up."
-                                       : "B goes up.";
-        if (e >= 0 && e < lib->browse_count && lib->browse[e].note != NULL) {
+        const char *where = lib->browse_title != NULL ? lib->browse_title : "";
+        if (e < 0) {
+            title = where;
+            text = lib->browse_about;
+            more = "A adds this folder to GAMES (it asks first). B goes up.";
+        } else if (e < lib->browse_count) {
+            title = lib->browse[e].name;
             note = lib->browse[e].note;
+            if (lib->browse_use == NULL) {
+                text = "A opens this shared folder. X adds all of it to GAMES.";
+            } else {
+                text = "A opens it. X adds it to GAMES without opening it: its images and game "
+                       "folders, and those one folder down.";
+            }
+            (void)snprintf(line, sizeof line, "In %s. B goes up.", where);
+            more = line;
+        } else {
+            title = where;
+            text = lib->browse_about;
+            more = "B goes up.";
         }
     }
     y += ui_text_wrap(d, UI_FONT_BOLD, (ui_rect){x, y, w, 2 * bh}, ui_col_accent, title) * bh;
@@ -879,7 +963,7 @@ static void draw_nas(const ui_draw *d, const ui_library *lib)
         y += sh;
     }
     y += 6;
-    if (text != NULL) {
+    if (text != NULL && y < bottom) {
         y += ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, 8 * sh}, ui_col_text, text) * sh;
         y += 6;
     }
@@ -1043,13 +1127,16 @@ static const char *hints(const ui_library *lib)
                                             : "A how to add one  B back  Left sections  Back exit";
     }
     if (lib->section == UI_LIB_SETTINGS && lib->page == UI_LIB_PAGE_NAS) {
-        return lib->nas_list.cur == 0   ? "A scan  B back  Left sections  Back exit"
-               : lib->nas_list.cur == 1 ? "A type it  B back  Left sections  Back exit"
-                                        : "A log in  B back  Left sections  Back exit";
+        int n = nas_line(lib, lib->nas_list.cur);
+        return n == NAS_FIND               ? "A find  B back  Left sections  Back exit"
+               : n == NAS_TYPE             ? "A type it  B back  Left sections  Back exit"
+               : lib->nas[n].login != NULL ? "A open  X other login  B back  Left sections"
+                                           : "A log in  B back  Left sections  Back exit";
     }
     if (lib->section == UI_LIB_SETTINGS && lib->page == UI_LIB_PAGE_BROWSE) {
         return ui_library_browse_entry(lib) < 0 ? "A add this folder  B up  Left sections"
-                                                : "A open  B up  LT RT page  Left sections";
+               : lib->browse_count > 0          ? "A open  X add it  B up  LT RT page"
+                                                : "B up  Left sections  Back exit";
     }
     if (lib->section == UI_LIB_SETTINGS && lib->page == UI_LIB_PAGE_SOURCES) {
         return ui_library_source(lib) < 0 ? "A add  B back  Left sections  Back exit"
