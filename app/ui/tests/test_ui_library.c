@@ -467,6 +467,90 @@ static void test_installed_section(void)
     TEST_ASSERT_TRUE(fake_saw("Nothing installed yet"));
 }
 
+/* The fills of the drive bars drawn (5 pixels high), their widths in `w`; returns how many. */
+static int disk_bars(int *w, int max)
+{
+    int n = 0;
+    for (int i = 0; i < fake_log_n; i++) {
+        if (fake_log[i].kind == 'f' && fake_log[i].r.h == 5) {
+            if (n < max) {
+                w[n] = fake_log[i].r.w;
+            }
+            n++;
+        }
+    }
+    return n;
+}
+
+/* INSTALLED's summary shows the drives' space: free, a bar of what's used, and the size when
+   every drive's fits; the other sections keep the counts. */
+static void test_installed_disks(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    ui_library_set_installed(&lib, found, 2);
+    (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALLED_GAMES, lib.section);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("SUMMARY") >= 0); /* no drives given: the counts */
+    TEST_ASSERT_TRUE(fake_find_text("HARD DRIVE") < 0);
+
+    /* One drive: 519.5 GB of 931.5 GB used, so 81 of the bar's 146 pixels. */
+    const ui_lib_disk e = {"E:", 412000000000ULL, 931500000000ULL};
+    ui_library_set_disks(&lib, &e, 1);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("HARD DRIVE") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("SUMMARY") < 0);
+    TEST_ASSERT_TRUE(fake_find_text("E: 412 GB free") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("of 931 GB") >= 0);
+    int w[4];
+    TEST_ASSERT_EQUAL_INT(2, disk_bars(w, 4)); /* the track, then what's used */
+    TEST_ASSERT_EQUAL_INT(146, w[0]);
+    TEST_ASSERT_EQUAL_INT(81, w[1]);
+
+    /* Three drives: two fit, without their sizes. */
+    const ui_lib_disk three[3] = {
+        {"F:", 0, 1500000000000ULL}, {"E:", 4380000000ULL, 8000000000ULL}, {"G:", 1000, 2000}};
+    ui_library_set_disks(&lib, three, 3);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_saw("F: 0 bytes free"));
+    TEST_ASSERT_TRUE(fake_saw("E: 4.38 GB free"));
+    TEST_ASSERT_FALSE(fake_saw("G:"));
+    TEST_ASSERT_FALSE(fake_saw("of "));
+    TEST_ASSERT_EQUAL_INT(4, disk_bars(w, 4));
+    TEST_ASSERT_EQUAL_INT(146, w[1]); /* F: is full */
+    TEST_ASSERT_EQUAL_INT(66, w[3]);  /* E: 3.62 of 8 GB */
+
+    /* A size that isn't known: no bar. A drive with a byte used still shows it. */
+    const ui_lib_disk two[2] = {{"E:", 5, 0}, {"F:", 999999999999ULL, 1000000000000ULL}};
+    ui_library_set_disks(&lib, two, 2);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_saw("E: 5 bytes free"));
+    TEST_ASSERT_EQUAL_INT(2, disk_bars(w, 4));
+    TEST_ASSERT_EQUAL_INT(1, w[1]);
+
+    /* GAMES keeps the counts. */
+    (void)ui_library_input(&lib, UI_BTN_UP, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_GAMES, lib.section);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("SUMMARY") >= 0);
+    TEST_ASSERT_FALSE(fake_saw("HARD DRIVE"));
+
+    /* No drives again: the counts in INSTALLED too. */
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    ui_library_set_disks(&lib, NULL, 2);
+    TEST_ASSERT_EQUAL_INT(0, lib.disk_count);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("SUMMARY") >= 0);
+}
+
 /* A dialog draws over the screen behind, saved in its first frame and copied after. */
 static void test_dialog_over_backdrop(void)
 {
@@ -1034,6 +1118,7 @@ int main(void)
     RUN_TEST(test_stopped);
     RUN_TEST(test_unfinished);
     RUN_TEST(test_installed_section);
+    RUN_TEST(test_installed_disks);
     RUN_TEST(test_dialog_over_backdrop);
     RUN_TEST(test_matches);
     RUN_TEST(test_search);

@@ -36,7 +36,7 @@ The console copies the game to its own drive (E:\Games by default), then starts 
    The question that follows names exactly the folder that will be added; ADD confirms.
 6. The console writes an `@smb` line in your map (`E:\xcat\map.txt`), lists the games and takes you to **GAMES**. Each game's details say where on the NAS it is.
 7. Pick a game and install it. A progress screen shows the copy, then it reads every file back to check it. If the network drops, it resumes where it stopped next time you install the same game.
-8. Installed games: **A > PLAY** starts the game. In GAMES an installed game also offers INSTALL AGAIN; in INSTALLED, DELETE.
+8. Installed games: **A > PLAY** starts the game. In GAMES an installed game also offers INSTALL AGAIN; in INSTALLED, DELETE. INSTALLED's left-hand panel shows how much is free on the drive the games go to (`E: 412 GB free`, a bar of how full it is, `of 931 GB`), and on E: too if they go to F: or G:.
 
 ### Apps
 

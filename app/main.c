@@ -2231,6 +2231,8 @@ static bool run_install(game *g, ui_lib_item *item)
    waits for a login (run_install). */
 static bool same_ci(const char *a, const char *b);
 
+static void show_installed(ui_library *lib);
+
 /* UI_LIB_DELETE: deletes the highlighted install's folder (INSTALLED), or what an unfinished
    install of the highlighted game left (GAMES). Only a folder this app made (a marker or a
    journal in it) in the install folder or E:\\Apps is ever deleted. */
@@ -2301,7 +2303,7 @@ static void delete_game(ui_library *lib, game *games, ui_lib_item *items, int co
     }
     scan_games();
     mark_games(games, items, count);
-    ui_library_set_installed(lib, found_items, found_count);
+    show_installed(lib);
     char msg[sizeof path + 160];
     if (err == XC_OK) {
         snprintf(msg, sizeof msg, "%s is deleted: %s is gone.", name, path);
@@ -2339,7 +2341,7 @@ static bool install_game(ui_library *lib, game *games, ui_lib_item *items, int i
     bool login_wanted = run_install(g, &items[i]);
     dest_dir = NULL;
     scan_games();
-    ui_library_set_installed(lib, found_items, found_count);
+    show_installed(lib);
     ui_lib_state st = items[i].state;
     snprintf(status, size, "%s: %s", g->name,
              login_wanted             ? "log in, and it carries on"
@@ -2632,6 +2634,38 @@ static int list_folders(void)
     return n;
 }
 
+/* INSTALLED's summary: the install folder's drive, then E: (apps) if that's another. */
+static char disk_names[2][4];
+static ui_lib_disk disks[2];
+
+/* Gives INSTALLED its list and the drives' space, and SETTINGS the free space again: after
+   anything that writes to or deletes from a drive. */
+static void show_installed(ui_library *lib)
+{
+    ui_library_set_installed(lib, found_items, found_count);
+    char letters[2] = {settings.install_dir[0], 'E'};
+    if (letters[0] >= 'a' && letters[0] <= 'z') {
+        letters[0] = (char)(letters[0] - 'a' + 'A');
+    }
+    int n = 0;
+    for (int i = 0; i < 2; i++) {
+        if (i == 1 && letters[1] == letters[0]) {
+            break;
+        }
+        char root[4] = {letters[i], ':', '\\', '\0'};
+        uint64_t free_bytes = 0;
+        uint64_t total_bytes = 0;
+        if (xc_nx_disk_space(root, &free_bytes, &total_bytes) != XC_OK) {
+            continue;
+        }
+        snprintf(disk_names[n], sizeof disk_names[n], "%c:", letters[i]);
+        disks[n] = (ui_lib_disk){disk_names[n], free_bytes, total_bytes};
+        n++;
+    }
+    ui_library_set_disks(lib, disks, n);
+    (void)list_folders(); /* the same drives, so the same count: just the notes change */
+}
+
 static bool same_ci(const char *a, const char *b)
 {
     for (;; a++, b++) {
@@ -2666,7 +2700,7 @@ static void change_folder(ui_library *lib, game *games, ui_lib_item *items, int 
     }
     scan_games();
     mark_games(games, items, count);
-    ui_library_set_installed(lib, found_items, found_count);
+    show_installed(lib);
     ui_library_set_folders(lib, settings.install_dir, folder_choices, list_folders());
     snprintf(msg, sizeof msg,
              "Games install to %s from now on. Games installed in another folder stay there.",
@@ -3392,7 +3426,7 @@ static void library(game *games, ui_lib_item *items, int count)
         halt("Out of memory for the list of games");
     }
     ui_library_open(&lib, items, count, shown);
-    ui_library_set_installed(&lib, found_items, found_count);
+    show_installed(&lib);
     refresh_logins(&lib);
     ui_library_set_sources(&lib, sources, list_sources());
     ui_library_set_folders(&lib, settings.install_dir, folder_choices, list_folders());

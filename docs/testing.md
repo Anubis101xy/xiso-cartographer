@@ -482,6 +482,18 @@ First run on the owner's console (0.10.0, 2026-11-01): scan, login, browse and i
 | 4 | Stop an install with B; GAMES > A on it > DELETE > DELETE | The folder is gone; the game says nothing is installed |
 | 5 | INSTALLED > A on an installed game > DELETE > KEEP, then DELETE > DELETE | Kept, then deleted; its saves in `E:\UDATA` are still there |
 
+## Drive space in INSTALLED (0.11.1)
+
+**On the PC** (done, 2026-11-02): `test_ui_library`'s `test_installed_disks` (one drive with its size and a bar of the used share; three drives, of which two fit, without sizes; a full drive; a size that isn't known; GAMES keeps the counts), `test_ui_install`'s sizes in TB. The panel's layout was checked against the fonts' real line heights (Noto Sans 16: 22 px, Chakra Petch 21: 28 px): one drive takes 53 of the 64 px under the label, two take 62.
+
+**On the console** (to do):
+
+| Step | How | Pass |
+|---|---|---|
+| 1 | Left, Down to INSTALLED | HARD DRIVE: `E: … free`, a bar, `of …`; the free space matches what another dashboard or an FTP client shows for E: (in decimal GB) |
+| 2 | Install a game, then delete it, then look again | The free space goes down after the install and back up after the delete |
+| 3 | On a console with F:, SETTINGS > install location > F:\Games, then INSTALLED | F: first, then E:, each with a bar, no sizes |
+
 ## FATX probe (M2)
 
 No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/src/fatx.c` ([fatx-names.md](formats/fatx-names.md)) come from the console's own kernel, measured by `app/fatx-probe`.

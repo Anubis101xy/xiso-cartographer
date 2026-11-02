@@ -17,6 +17,7 @@
  */
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "input.h"
 #include "keyboard.h"
@@ -158,6 +159,13 @@ typedef struct ui_lib_folder {
     const char *note; /* under it, small: how much is free; may be NULL */
 } ui_lib_folder;
 
+/* A drive INSTALLED shows the space of, as the caller describes it. */
+typedef struct ui_lib_disk {
+    const char *name;     /* "E:" */
+    uint64_t free_bytes;  /* what's free on it */
+    uint64_t total_bytes; /* its size; 0 if it isn't known (no bar is drawn) */
+} ui_lib_disk;
+
 #define UI_LIB_QUERY_MAX 64     /* a search's size, with the NUL */
 #define UI_LIB_EMAIL_MAX 255    /* with the NUL: xcat/login.h's 254 bytes */
 #define UI_LIB_PASSWORD_MAX 129 /* with the NUL: xcat/login.h's 128 bytes */
@@ -216,6 +224,8 @@ typedef struct ui_library {
     const ui_lib_item *installed; /* INSTALLED: the folders in install_dir */
     int installed_count;
     ui_list installed_list;
+    const ui_lib_disk *disks; /* INSTALLED's summary: the drives' space, the caller's */
+    int disk_count;
     ui_lib_section section;
     bool in_sections;     /* the D-pad moves between the sections, not the games */
     ui_lib_action asking; /* what the open dialog asks; UI_LIB_NONE: none is open */
@@ -240,6 +250,10 @@ bool ui_library_to_apps(const ui_library *lib);
 
 /* Gives INSTALLED its list (again, after an install), keeping its place where it can. */
 void ui_library_set_installed(ui_library *lib, const ui_lib_item *items, int count);
+
+/* Gives INSTALLED's summary the space on the drives (the install folder's first; the array
+   stays the caller's), shown in place of the game counts. 0 drives: the counts again. */
+void ui_library_set_disks(ui_library *lib, const ui_lib_disk *disks, int count);
 
 /* Says where games install, and which folders SETTINGS offers (the strings stay the caller's).
    Until then games install to E:\Games and SETTINGS offers just that. */

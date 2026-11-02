@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-02
+
+### Added
+
+- INSTALLED's summary panel shows **HARD DRIVE**: the free space on the install folder's drive, a bar of how much of it is used, and its size (`E: 412 GB free`, `of 931 GB`); with games on F: or G:, E: (where apps go) is shown under it, without the sizes. It's read again after every install, delete and change of install folder, and so is the free space SETTINGS shows for each drive. The other sections keep the game counts.
+
+### Changed
+
+- Sizes of a terabyte and more read `1.82 TB`, not `1820 GB`.
+
 ## [0.11.0] - 2026-11-01
 
 Archives, apps, and deleting installs.

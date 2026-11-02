@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "install_view.h" /* ui_format_size */
 #include "theme.h"
 
 #define PAD 10
@@ -299,6 +300,12 @@ void ui_library_set_installed(ui_library *lib, const ui_lib_item *items, int cou
     if (l->top > l->cur) {
         l->top = l->cur;
     }
+}
+
+void ui_library_set_disks(ui_library *lib, const ui_lib_disk *disks, int count)
+{
+    lib->disks = disks;
+    lib->disk_count = disks != NULL && count > 0 ? count : 0;
 }
 
 /* The highlighted line of the section shown, or NULL. */
@@ -748,12 +755,66 @@ static void draw_sections(const ui_draw *d, const ui_library *lib)
     }
 }
 
+#define DISK_BAR_H 5   /* the bar under a drive's line */
+#define DISK_BAR_GAP 2 /* above and below it */
+#define DISK_GAP 4     /* between drives */
+
+/* How much of drive k is used, as a bar w wide. */
+static void draw_disk_bar(const ui_draw *d, int x, int y, int w, const ui_lib_disk *k)
+{
+    d->fill(d->ctx, (ui_rect){x, y, w, DISK_BAR_H}, ui_col_idle);
+    uint64_t used = k->free_bytes < k->total_bytes ? k->total_bytes - k->free_bytes : 0U;
+    int u = (int)(used * (uint64_t)w / k->total_bytes);
+    if (u == 0 && used > 0U) {
+        u = 1; /* a drive with anything on it never looks empty */
+    }
+    if (u > 0) {
+        d->fill(d->ctx, (ui_rect){x, y, u, DISK_BAR_H}, ui_col_border);
+    }
+}
+
+/* INSTALLED's summary: each drive's free space and a bar of what's used, then its size if
+   every drive's fits. Drives that don't fit are left out. */
+static void draw_disks(const ui_draw *d, const ui_library *lib, int x, int y, int w)
+{
+    int sh = d->line_height(d->ctx, UI_FONT_SMALL);
+    int bottom = summary.y + summary.h - PAD;
+    int n = lib->disk_count;
+    int with_size = sh + DISK_BAR_GAP + DISK_BAR_H + DISK_BAR_GAP + sh;
+    bool sizes = n * with_size + (n - 1) * DISK_GAP <= bottom - y;
+    char size[24];
+    char line[48];
+    for (int i = 0; i < n && y + sh <= bottom; i++) {
+        const ui_lib_disk *k = &lib->disks[i];
+        ui_format_size(size, sizeof size, k->free_bytes);
+        (void)snprintf(line, sizeof line, "%s %s free", k->name != NULL ? k->name : "", size);
+        (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_text, line);
+        y += sh;
+        if (k->total_bytes > 0U && y + DISK_BAR_GAP + DISK_BAR_H <= bottom) {
+            draw_disk_bar(d, x, y + DISK_BAR_GAP, w, k);
+            y += DISK_BAR_GAP + DISK_BAR_H;
+            if (sizes) {
+                ui_format_size(size, sizeof size, k->total_bytes);
+                (void)snprintf(line, sizeof line, "of %s", size);
+                (void)ui_text_fit(d, UI_FONT_SMALL, x, y + DISK_BAR_GAP, w, ui_col_dim, line);
+                y += DISK_BAR_GAP + sh;
+            }
+        }
+        y += DISK_GAP;
+    }
+}
+
 static void draw_summary(const ui_draw *d, const ui_library *lib)
 {
     ui_panel(d, summary, UI_CHAMFER, ui_col_panel, ui_col_border);
     int x = summary.x + 14;
     int w = summary.w - 24;
     int y = summary.y + PAD;
+    if (lib->section == UI_LIB_INSTALLED_GAMES && lib->disk_count > 0) {
+        (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, ui_col_accent, "HARD DRIVE");
+        draw_disks(d, lib, x, y + d->line_height(d->ctx, UI_FONT_LABEL) + 4, w);
+        return;
+    }
     (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, ui_col_accent, "SUMMARY");
     y += d->line_height(d->ctx, UI_FONT_LABEL) + 4;
     int installed = 0;

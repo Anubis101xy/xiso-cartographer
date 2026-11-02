@@ -30,8 +30,12 @@ static void test_format_size(void)
     TEST_ASSERT_EQUAL_STRING("4.38 GB", s);
     ui_format_size(s, sizeof s, 8547991552ULL); /* a dual-layer disc */
     TEST_ASSERT_EQUAL_STRING("8.54 GB", s);
-    ui_format_size(s, sizeof s, 12000000000000ULL); /* no bigger unit */
-    TEST_ASSERT_EQUAL_STRING("12000 GB", s);
+    ui_format_size(s, sizeof s, 999999999999ULL);
+    TEST_ASSERT_EQUAL_STRING("999 GB", s);
+    ui_format_size(s, sizeof s, 2000398934016ULL); /* a "2 TB" drive */
+    TEST_ASSERT_EQUAL_STRING("2.00 TB", s);
+    ui_format_size(s, sizeof s, 12000000000000000ULL); /* no bigger unit */
+    TEST_ASSERT_EQUAL_STRING("12000 TB", s);
 }
 
 static void test_format_left(void)

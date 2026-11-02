@@ -58,6 +58,9 @@ void xc_nx_mount_fg(bool *has_f, bool *has_g);
 /* Free bytes on the drive containing `path` (e.g. "E:\"). */
 xc_err xc_nx_free_space(const char *path, uint64_t *free_bytes);
 
+/* Free bytes and the size of the drive containing `path`. */
+xc_err xc_nx_disk_space(const char *path, uint64_t *free_bytes, uint64_t *total_bytes);
+
 /* The cluster size of the drive `root` ("F:\"), or 0 if it can't be read. */
 uint32_t xc_nx_cluster_size(const char *root);
 
