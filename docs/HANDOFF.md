@@ -28,7 +28,7 @@ A homebrew app (XBE) for **soft- or hard-modded original Xbox consoles**. It pre
 
 - Getting past captchas, Cloudflare or any other bot or access protection, scraping protected download flows, or violating a source's terms. Not now, not later.
 - Hosting, mirroring or relaying game images.
-- `.7z`/`.rar` on the Xbox (memory makes it infeasible). Torrents on the Xbox are a late stretch goal (M11).
+- `.rar` on the Xbox (its decoder's licence and size aren't worth it), and `.7z` beyond what fits in the console's memory. Since 0.11.0, a `.7z` whose dictionary fits in free memory is installed ([ADR 0018](./adr/0018-smb-sources.md) decision 9). Torrents on the Xbox are a late stretch goal (M11).
 - Using the leaked Microsoft XDK. **nxdk only**.
 
 ---
