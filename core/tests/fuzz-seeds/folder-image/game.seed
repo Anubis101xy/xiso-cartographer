@@ -1,0 +1,8 @@
+f 5000 default.xbe
+d media
+f 70000 media/intro.xmv
+d media/empty
+f 0 media/zero.bin
+d Media2
+d Media2/sub
+f 2048 Media2/sub/deep.dat

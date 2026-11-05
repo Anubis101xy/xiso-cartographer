@@ -129,3 +129,7 @@ A reader that gets the image as a stream ([stream-install.md](stream-install.md)
 - every other rule applies as in §3–§7, to what is listed. Limits count only listed entries.
 
 Once every table is available, the result is the same as `xc_xdvdfs_list()`'s.
+
+## 10. A name in the root
+
+A game's details read its `default.xbe` ([art.md §3](art.md#3-the-xbe)) without listing the image: `xc_xdvdfs_find_root()` reads only the root's table (at most the size §6 reads), and visits its entries as §3 does, each at most once (a loop, or a child outside the table, is `XC_ERR_CORRUPT`). It finds the first entry whose name equals the one asked for with `a`–`z` folded to upper case, and gives its offset, size and attributes; directories below aren't read, so the name of a file deeper down isn't found. An empty root finds nothing.

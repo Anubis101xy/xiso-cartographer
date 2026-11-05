@@ -22,6 +22,7 @@ typedef enum xc_map_line_kind {
     XC_MAP_LINE_INCLUDE,    /* @include <location> (§5.1) */
     XC_MAP_LINE_ARCHIVEORG, /* @archiveorg <identifier> (§5.2) */
     XC_MAP_LINE_DIRECTIVE,  /* any other @directive (§5.3) */
+    XC_MAP_LINE_SMB,        /* @smb <folder> (§5.4) */
 } xc_map_line_kind;
 
 /* One source line. The strings point into the data and are not NUL-terminated. */
@@ -46,8 +47,9 @@ xc_err xc_map_lines(const char *data, size_t len, xc_map_line *out, size_t max, 
  * Builds the line for a new source into out[0, cap) and checks it as the reader would, alone
  * in a map: ENTRY from `key` ("4D530004" or "4D530004@PAL", any case) and the image's `url`;
  * INCLUDE from a map's `url` (http or https only); ARCHIVEORG from an item's identifier in
- * `url`. XC_ERR_MAP if it would be an invalid line, with why[0, why_cap) saying why in words for
- * the screen; XC_ERR_LIMIT if it's longer than XC_MAP_MAX_LINE.
+ * `url`; SMB from a NAS folder's smb:// `url` (checked, not listed: smb.md §1). XC_ERR_MAP if it
+ * would be an invalid line, with why[0, why_cap) saying why in words for the screen; XC_ERR_LIMIT
+ * if it's longer than XC_MAP_MAX_LINE.
  */
 xc_err xc_map_new_line(xc_map_line_kind kind, const char *key, const char *url, char *out,
                        size_t cap, char *why, size_t why_cap);

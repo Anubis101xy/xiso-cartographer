@@ -68,6 +68,9 @@ typedef struct ui_draw {
     void (*save_backdrop)(void *ctx, ui_color shade);
     /* Draws the copy save_backdrop kept over the whole screen; nothing if there's none. */
     void (*backdrop)(void *ctx);
+    /* Draws w x h pixels (0xFFRRGGBB, row by row; opaque, their top byte ignored) with their
+       top left at (x, y), inside the clip. */
+    void (*pixels)(void *ctx, const uint32_t *px, int w, int h, int x, int y);
 } ui_draw;
 
 /* The title-safe area: the screen less 5 % on each side, which TVs may hide (ADR 0015). */

@@ -523,6 +523,85 @@ xc_err xc_xdvdfs_list_partial(const xc_source *src, const xc_xdvdfs_volume *vol,
     return list(src, vol, limits, have, have_ctx, out);
 }
 
+xc_err xc_xdvdfs_find_root(const xc_source *src, const xc_xdvdfs_volume *vol, const char *name,
+                           xc_xdvdfs_entry *out, bool *found)
+{
+    memset(out, 0, sizeof *out);
+    *found = false;
+    if (src == NULL || vol == NULL || name == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    uint32_t size = vol->root_size;
+    if (size == 0) {
+        return XC_OK; /* §3 rule 2: nothing in the image */
+    }
+    uint64_t at = sector_offset(vol->partition_offset, vol->root_sector);
+    if (!extent_ok(src, at, size)) {
+        return XC_ERR_CORRUPT;
+    }
+    size_t tl = size < MAX_TABLE_READ ? size : MAX_TABLE_READ;
+    size_t slots = tl / 4 + 1;
+    uint8_t *t = malloc(tl);
+    uint8_t *seen = calloc(slots, 1);
+    uint32_t *stack = malloc((2 * slots + 1) * sizeof *stack);
+    xc_err err =
+        t != NULL && seen != NULL && stack != NULL ? xc_source_read(src, at, t, tl) : XC_ERR_NOMEM;
+    uint16_t first = 0;
+    if (err == XC_OK && !xc_rd_u16le(t, tl, 0, &first)) {
+        err = XC_ERR_CORRUPT;
+    }
+    size_t want = strlen(name);
+    size_t sp = 0;
+    if (err == XC_OK && first != PAD16) {
+        stack[sp++] = 0;
+    }
+    /* As walk_dir: every slot reached once, at most two pushed each. */
+    while (err == XC_OK && sp > 0 && !*found) {
+        uint32_t slot = stack[--sp];
+        if (slot >= slots || seen[slot]) {
+            err = XC_ERR_CORRUPT;
+            break;
+        }
+        seen[slot] = 1;
+        size_t pos = (size_t)slot * 4U;
+        uint16_t left = 0;
+        uint16_t right = 0;
+        uint32_t esector = 0;
+        uint32_t esize = 0;
+        uint8_t attr = 0;
+        uint8_t nlen = 0;
+        if (!xc_rd_u16le(t, tl, pos, &left) || !xc_rd_u16le(t, tl, pos + 2, &right) ||
+            !xc_rd_u32le(t, tl, pos + 4, &esector) || !xc_rd_u32le(t, tl, pos + 8, &esize) ||
+            !xc_rd_u8(t, tl, pos + 12, &attr) || !xc_rd_u8(t, tl, pos + 13, &nlen) ||
+            left == PAD16 || !xc_in_bounds(tl, pos + ENTRY_HEADER, nlen)) {
+            err = XC_ERR_CORRUPT;
+            break;
+        }
+        const uint8_t *n = t + pos + ENTRY_HEADER;
+        bool same = nlen == want;
+        for (size_t i = 0; same && i < want; i++) {
+            same = fold(n[i]) == fold((uint8_t)name[i]);
+        }
+        if (same) {
+            out->offset = sector_offset(vol->partition_offset, esector);
+            out->size = esize;
+            out->sector = esector;
+            out->attributes = attr;
+            *found = true;
+        }
+        if (right != 0) {
+            stack[sp++] = right;
+        }
+        if (left != 0) {
+            stack[sp++] = left;
+        }
+    }
+    free(t);
+    free(seen);
+    free(stack);
+    return err;
+}
+
 void xc_xdvdfs_listing_free(xc_xdvdfs_listing *listing)
 {
     if (listing == NULL) {

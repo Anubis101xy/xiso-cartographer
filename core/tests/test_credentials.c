@@ -164,7 +164,8 @@ static void test_rejections(void)
         {HDR "[abcdefghijabcdefghijabcdefghijabc]\n", 2, "1-32 characters"},
         {HDR "[a]\nhosts=a.org\ncookie=c\n[A]\nhosts=b.org\ncookie=c\n", 5, "appears twice"},
         {HDR "[a]\ncookie=SECRET\n", 2, "[a] has no hosts"},
-        {HDR "[a]\nhosts=a.org\n[b]\nhosts=b.org\ncookie=c\n", 2, "neither cookie nor header"},
+        {HDR "[a]\nhosts=a.org\n[b]\nhosts=b.org\ncookie=c\n", 2,
+         "neither cookie, header nor smb_user"},
         {HDR "[a]\nhosts=a.org\ncookie=c\nhosts=b.org\n", 5, "hosts given twice"},
         {HDR "[a]\nhosts=a.org\ncookie=SECRET\ncookie=SECRET\n", 5, "cookie given twice"},
         {HDR "[a]\nhosts=a.org\ncookie=\n", 4, "empty cookie"},
@@ -419,6 +420,91 @@ static void test_http_auth_adapter(void)
     TEST_ASSERT_NULL(section);
 }
 
+/* §4.1: SMB logins, and §5's overlap rule kept per kind of server. */
+static void test_smb_logins(void)
+{
+    expect_ok(HDR "[nas]\nhosts = 192.168.1.50\nsmb_user = shaun\n"
+                  "smb_nthash = 8846F7EAEE8FB117AD06BDD830B7586C\n"
+                  "[web]\nhosts = 192.168.1.50\nheader = Authorization: Basic eDp5\n"
+                  "allow_http = yes\n"
+                  "[office]\nhosts = files.corp.lan:4450\nsmb_user = Shaun D\n"
+                  "smb_domain = CORP\nsmb_nthash = 31d6cfe0d16ae931b73c59d7e0c089c0\n");
+    TEST_ASSERT_EQUAL_size_t(3, creds.section_count);
+    const xc_cred_section *s = xc_cred_for_smb(&creds, "192.168.1.50", 445);
+    TEST_ASSERT_NOT_NULL(s);
+    TEST_ASSERT_EQUAL_STRING("nas", s->name);
+    TEST_ASSERT_EQUAL_STRING("shaun", s->smb_user);
+    TEST_ASSERT_NULL(s->smb_domain);
+    TEST_ASSERT_EQUAL_STRING("8846F7EAEE8FB117AD06BDD830B7586C", s->smb_nthash);
+    /* HTTP to the same NAS gets the HTTP section, never the SMB one. */
+    xc_url u = url("http://192.168.1.50:8080/a.iso");
+    s = xc_cred_for_url(&creds, &u);
+    TEST_ASSERT_NOT_NULL(s);
+    TEST_ASSERT_EQUAL_STRING("web", s->name);
+    s = xc_cred_for_smb(&creds, "files.corp.lan", 4450);
+    TEST_ASSERT_NOT_NULL(s);
+    TEST_ASSERT_EQUAL_STRING("CORP", s->smb_domain);
+    TEST_ASSERT_EQUAL_STRING("Shaun D", s->smb_user);
+    TEST_ASSERT_NULL(xc_cred_for_smb(&creds, "files.corp.lan", 445)); /* another port */
+    TEST_ASSERT_NULL(xc_cred_for_smb(&creds, "192.168.1.51", 445));
+    /* An SMB-only section is never sent over HTTP. */
+    u = url("https://files.corp.lan:4450/x");
+    TEST_ASSERT_NULL(xc_cred_for_url(&creds, &u));
+    /* Wildcards match host names for SMB too. */
+    expect_ok(HDR
+              "[w]\nhosts = *.lan\nsmb_user = a\nsmb_nthash = 8846F7EAEE8FB117AD06BDD830B7586C\n");
+    TEST_ASSERT_NOT_NULL(xc_cred_for_smb(&creds, "tnas.lan", 445));
+    TEST_ASSERT_NULL(xc_cred_for_smb(&creds, "lan", 445));
+
+    expect_reject(HDR "[a]\nhosts = nas\nsmb_user = u\n", 2, "smb_user and smb_nthash go together");
+    expect_reject(HDR "[a]\nhosts = nas\nsmb_nthash = 8846F7EAEE8FB117AD06BDD830B7586C\n", 2,
+                  "smb_user and smb_nthash go together");
+    expect_reject(HDR "[a]\nhosts = nas\ncookie = c\nsmb_domain = D\n", 2,
+                  "smb_domain without smb_user");
+    expect_reject(HDR "[a]\nhosts = nas\nsmb_user = u\nsmb_nthash = SECRET\n", 5,
+                  "smb_nthash must be 32 hex digits");
+    expect_reject(HDR "[a]\nhosts = nas\nsmb_user = dom\\u\n"
+                      "smb_nthash = 8846F7EAEE8FB117AD06BDD830B7586C\n",
+                  4, "invalid smb_user");
+    expect_reject(HDR "[a]\nhosts = nas\nsmb_user = u\nsmb_user = v\n", 5, "smb_user given twice");
+    expect_reject(HDR
+                  "[a]\nhosts = nas\nsmb_user = u\nsmb_nthash = 8846F7EAEE8FB117AD06BDD830B7586C\n"
+                  "[b]\nhosts = NAS\nsmb_user = v\nsmb_nthash = 31d6cfe0d16ae931b73c59d7e0c089c0\n",
+                  6, "overlap");
+}
+
+static void test_smb_section_writer(void)
+{
+    char out[512];
+    TEST_ASSERT_EQUAL_INT(XC_OK,
+                          xc_cred_smb_section("nas-192-168-1-50", "192.168.1.50", "shaun", NULL,
+                                              "8846F7EAEE8FB117AD06BDD830B7586C", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("[nas-192-168-1-50]\nhosts = 192.168.1.50\nsmb_user = shaun\n"
+                             "smb_nthash = 8846F7EAEE8FB117AD06BDD830B7586C\n",
+                             out);
+    char file[600];
+    (void)snprintf(file, sizeof file, HDR "%s", out);
+    expect_ok(file);
+    TEST_ASSERT_EQUAL_INT(XC_OK,
+                          xc_cred_smb_section("n", "nas:4450", "u", "WORKGROUP",
+                                              "8846F7EAEE8FB117AD06BDD830B7586C", out, sizeof out));
+    TEST_ASSERT_NOT_NULL(strstr(out, "smb_domain = WORKGROUP\n"));
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG,
+                          xc_cred_smb_section("bad name", "nas", "u", NULL,
+                                              "8846F7EAEE8FB117AD06BDD830B7586C", out, sizeof out));
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG,
+                          xc_cred_smb_section("n", "nas", "u\nx", NULL,
+                                              "8846F7EAEE8FB117AD06BDD830B7586C", out, sizeof out));
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG,
+                          xc_cred_smb_section("n", "a,b", "u", NULL,
+                                              "8846F7EAEE8FB117AD06BDD830B7586C", out, sizeof out));
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG,
+                          xc_cred_smb_section("n", "nas", "u", NULL, "1234", out, sizeof out));
+    TEST_ASSERT_EQUAL_INT(
+        XC_ERR_LIMIT,
+        xc_cred_smb_section("n", "nas", "u", NULL, "8846F7EAEE8FB117AD06BDD830B7586C", out, 20));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -433,5 +519,7 @@ int main(void)
     RUN_TEST(test_scope);
     RUN_TEST(test_headers_output);
     RUN_TEST(test_http_auth_adapter);
+    RUN_TEST(test_smb_logins);
+    RUN_TEST(test_smb_section_writer);
     return UNITY_END();
 }

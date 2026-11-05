@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "install_view.h" /* ui_format_size */
 #include "theme.h"
 
 #define PAD 10
@@ -11,7 +12,7 @@
 static const char *const section_names[UI_LIB_SECTION_COUNT_] = {"GAMES", "INSTALLED", "SETTINGS"};
 
 /* The title-safe area (32, 24, 576 x 432), as docs/ui-style.md#layout. */
-static const ui_rect tab = {32, 24, 240, 46};
+static const ui_rect tab = {32, 24, 170, 46};
 static const ui_rect nav = {32, 80, 170, 196};
 static const ui_rect summary = {32, 284, 170, 116};
 static const ui_rect list = {210, 80, 212, 320};
@@ -21,8 +22,9 @@ static const ui_rect footer = {32, 408, 576, 48};
 /* The list's lines, inside its panel: 8 pixels in at the sides, PAD at the top and bottom. */
 static const ui_rect list_in = {218, 90, 196, 300};
 
-/* The search's panel, right of the title tab, while GAMES is searched. */
-static const ui_rect search_box = {280, 24, 328, 46};
+/* Right of the title tab: the addresses and the drives, or the search while GAMES is searched. */
+static const ui_rect top_box = {210, 24, 398, 46};
+static const ui_rect search_box = {210, 24, 398, 46};
 
 static char lower(char c)
 {
@@ -41,6 +43,7 @@ void ui_library_open(ui_library *lib, const ui_lib_item *items, int count, int *
     lib->list.count = count;
     static const ui_lib_folder games = {"E:\\Games", NULL};
     lib->install_dir = games.path;
+    lib->apps_dir = "E:\\Apps";
     lib->folders = &games;
     lib->folder_count = 1;
     lib->settings_list.count = UI_LIB_SETTING_COUNT_;
@@ -49,6 +52,8 @@ void ui_library_open(ui_library *lib, const ui_lib_item *items, int count, int *
     lib->host_count = 1;
     lib->host_list.count = 1;
     lib->source_list.count = 1; /* "Add source" */
+    lib->nas_list.count = 2;    /* "Find a NAS on the network", "Type a NAS address" */
+    lib->nas_pick = -1;
 }
 
 void ui_library_set_items(ui_library *lib, const ui_lib_item *items, int count, int *shown)
@@ -85,6 +90,80 @@ void ui_library_set_sources(ui_library *lib, const ui_lib_source *sources, int c
 int ui_library_source(const ui_library *lib)
 {
     return lib->source_list.cur - 1;
+}
+
+bool ui_library_to_apps(const ui_library *lib)
+{
+    return lib->to_apps;
+}
+
+int ui_library_installed(const ui_library *lib)
+{
+    return lib->installed_list.cur;
+}
+
+void ui_library_set_nas(ui_library *lib, const ui_lib_nas *nas, int count, const char *status)
+{
+    lib->nas = nas;
+    lib->nas_count = count;
+    lib->nas_status = status;
+    lib->nas_list = (ui_list){count + 2, 0, 0}; /* the first NAS, else "Find a NAS" */
+}
+
+void ui_library_set_console(ui_library *lib, const char *line)
+{
+    lib->console_line = line;
+}
+
+/* The NAS page's lines after the NASes. */
+#define NAS_FIND (-1)
+#define NAS_TYPE (-2)
+
+/* What line `cur` of the NAS page is: a NAS (its index), NAS_FIND or NAS_TYPE. */
+static int nas_line(const ui_library *lib, int cur)
+{
+    return cur < lib->nas_count ? cur : cur == lib->nas_count ? NAS_FIND : NAS_TYPE;
+}
+
+int ui_library_nas(const ui_library *lib)
+{
+    int n = nas_line(lib, lib->nas_list.cur);
+    return n >= 0 ? n : -1;
+}
+
+void ui_library_browse(ui_library *lib, const char *title, const char *about,
+                       const ui_lib_entry *entries, int count, const char *use)
+{
+    lib->browse = entries;
+    lib->browse_count = count;
+    lib->browse_use = use;
+    lib->browse_title = title;
+    lib->browse_about = about;
+    lib->browse_list = (ui_list){count + (use != NULL ? 1 : 0), 0, 0};
+    lib->page = UI_LIB_PAGE_BROWSE;
+}
+
+int ui_library_browse_entry(const ui_library *lib)
+{
+    return lib->browse_list.cur - (lib->browse_use != NULL ? 1 : 0);
+}
+
+int ui_library_nas_pick(const ui_library *lib)
+{
+    return lib->nas_pick;
+}
+
+void ui_library_nas_page(ui_library *lib)
+{
+    lib->page = UI_LIB_PAGE_NAS;
+}
+
+void ui_library_forget_nas_password(ui_library *lib)
+{
+    volatile char *p = lib->nas_password; /* a store the compiler can't drop */
+    for (size_t i = 0; i < sizeof lib->nas_password; i++) {
+        p[i] = '\0';
+    }
 }
 
 void ui_library_set_hosts(ui_library *lib, const ui_lib_host *hosts, int count)
@@ -150,6 +229,58 @@ static bool has_word(const char *s, const char *w, size_t n)
         }
     }
     return false;
+}
+
+static bool digit(char c)
+{
+    return c >= '0' && c <= '9';
+}
+
+int ui_library_name_cmp(const char *a, const char *b)
+{
+    const char *p = a;
+    const char *q = b;
+    while (*p != '\0' && *q != '\0') {
+        if (digit(*p) && digit(*q)) {
+            /* By value: leading zeros skipped, then the longer run is larger, else by digits. */
+            while (*p == '0' && digit(p[1])) {
+                p++;
+            }
+            while (*q == '0' && digit(q[1])) {
+                q++;
+            }
+            size_t np = 0;
+            size_t nq = 0;
+            while (digit(p[np])) {
+                np++;
+            }
+            while (digit(q[nq])) {
+                nq++;
+            }
+            if (np != nq) {
+                return np < nq ? -1 : 1;
+            }
+            int c = memcmp(p, q, np);
+            if (c != 0) {
+                return c < 0 ? -1 : 1;
+            }
+            p += np;
+            q += nq;
+            continue;
+        }
+        unsigned char x = (unsigned char)lower(*p);
+        unsigned char y = (unsigned char)lower(*q);
+        if (x != y) {
+            return x < y ? -1 : 1;
+        }
+        p++;
+        q++;
+    }
+    if (*p != *q) {
+        return *p == '\0' ? -1 : 1;
+    }
+    int c = strcmp(a, b); /* the same once folded: settle it by bytes */
+    return c < 0 ? -1 : c > 0 ? 1 : 0;
 }
 
 bool ui_library_matches(const ui_lib_item *it, const char *query)
@@ -224,7 +355,51 @@ void ui_library_set_installed(ui_library *lib, const ui_lib_item *items, int cou
     }
 }
 
+void ui_library_set_top(ui_library *lib, const ui_lib_top *top)
+{
+    lib->top = top != NULL ? *top : (ui_lib_top){0};
+}
+
+void ui_library_set_disks(ui_library *lib, const ui_lib_disk *disks, int count)
+{
+    lib->disks = disks;
+    lib->disk_count = disks != NULL && count > 0 ? count : 0;
+}
+
 /* The highlighted line of the section shown, or NULL. */
+bool ui_library_shown_item(const ui_library *lib, ui_lib_section *section, int *item)
+{
+    *section = lib->section;
+    if (lib->section == UI_LIB_GAMES && lib->list.count > 0) {
+        *item = ui_library_game(lib);
+        return true;
+    }
+    if (lib->section == UI_LIB_INSTALLED_GAMES && lib->installed_count > 0) {
+        *item = lib->installed_list.cur;
+        return true;
+    }
+    *item = -1;
+    return false;
+}
+
+void ui_library_set_art(ui_library *lib, ui_lib_section section, int item, const ui_lib_art *art)
+{
+    lib->art = art;
+    lib->art_section = section;
+    lib->art_item = item;
+}
+
+/* The art given for the item shown, or NULL. */
+static const ui_lib_art *shown_art(const ui_library *lib)
+{
+    ui_lib_section section;
+    int item = -1;
+    if (lib->art == NULL || !ui_library_shown_item(lib, &section, &item)) {
+        return NULL;
+    }
+    return section == lib->art_section && item == lib->art_item ? lib->art : NULL;
+}
+
 static const ui_lib_item *current(const ui_library *lib)
 {
     if (lib->section == UI_LIB_GAMES && lib->list.count > 0) {
@@ -241,13 +416,59 @@ int ui_library_rows(const ui_draw *d)
     return ui_list_rows(d, list_in);
 }
 
+/* An item that was started and isn't finished: installing carries on, or it can be deleted. */
+static bool unfinished(const ui_lib_item *it)
+{
+    return it->state == UI_LIB_UNFINISHED || it->state == UI_LIB_FAILED ||
+           it->state == UI_LIB_STOPPED;
+}
+
+/* The game the delete question is about, in GAMES or INSTALLED. */
+static const ui_lib_item *highlighted(const ui_library *lib)
+{
+    return lib->section == UI_LIB_GAMES ? &lib->items[ui_library_game(lib)]
+                                        : &lib->installed[ui_library_installed(lib)];
+}
+
 static void ask(ui_library *lib, ui_lib_action what)
 {
     if (what == UI_LIB_INSTALL) {
-        (void)snprintf(lib->message, sizeof lib->message,
-                       "Install %s to %s? It can be stopped with B and resumed later.",
-                       lib->items[ui_library_game(lib)].name, lib->install_dir);
-        lib->dialog = (ui_dialog){"INSTALL", lib->message, {"INSTALL", "CANCEL", NULL}, 0, 1};
+        const ui_lib_item *it = &lib->items[ui_library_game(lib)];
+        if (unfinished(it)) {
+            (void)snprintf(lib->message, sizeof lib->message,
+                           "%s isn't finished. Carry on where it stopped, or delete what's on "
+                           "the hard disk so far?",
+                           it->name);
+            lib->dialog =
+                (ui_dialog){"NOT FINISHED", lib->message, {"CARRY ON", "DELETE", "CANCEL"}, 0, 2};
+        } else if (it->app) {
+            (void)snprintf(lib->message, sizeof lib->message,
+                           "Install %s to %s? It looks like an app. AS A GAME puts it in %s.",
+                           it->name, lib->apps_dir, lib->install_dir);
+            lib->dialog =
+                (ui_dialog){"INSTALL", lib->message, {"INSTALL", "AS A GAME", "CANCEL"}, 0, 2};
+        } else {
+            (void)snprintf(lib->message, sizeof lib->message,
+                           "Install %s to %s? AS AN APP puts it in %s. B stops it; it carries "
+                           "on later.",
+                           it->name, lib->install_dir, lib->apps_dir);
+            lib->dialog =
+                (ui_dialog){"INSTALL", lib->message, {"INSTALL", "AS AN APP", "CANCEL"}, 0, 2};
+        }
+    } else if (what == UI_LIB_DELETE) {
+        const ui_lib_item *it = highlighted(lib);
+        if (it->state == UI_LIB_INSTALLED) {
+            (void)snprintf(lib->message, sizeof lib->message,
+                           "Delete %s? %s Saved games stay: they're in E:\\UDATA, not in its "
+                           "folder.",
+                           it->name, it->note != NULL ? it->note : "");
+        } else {
+            (void)snprintf(lib->message, sizeof lib->message,
+                           "Delete what the unfinished install of %s left? %s Installing it "
+                           "again starts over.",
+                           it->name, it->note != NULL ? it->note : "");
+        }
+        lib->dialog = (ui_dialog){"DELETE", lib->message, {"DELETE", "KEEP", NULL}, 1, 1};
     } else if (what == UI_LIB_LOGOUT) {
         lib->dialog = (ui_dialog){"LOG OUT",
                                   "Log out of archive.org on this console? Items that need the "
@@ -267,6 +488,32 @@ static void ask(ui_library *lib, ui_lib_action what)
                        "Remove this line from the map? %s. Its games leave the list.",
                        lib->sources[ui_library_source(lib)].name);
         lib->dialog = (ui_dialog){"REMOVE SOURCE", lib->message, {"REMOVE", "CANCEL", NULL}, 1, 1};
+    } else if (what == UI_LIB_PLAY) {
+        const ui_lib_item *it = lib->section == UI_LIB_GAMES
+                                    ? &lib->items[ui_library_game(lib)]
+                                    : &lib->installed[ui_library_installed(lib)];
+        (void)snprintf(lib->message, sizeof lib->message,
+                       "Play %s? This app closes and the game starts.", it->name);
+        lib->dialog =
+            lib->section == UI_LIB_GAMES
+                ? (ui_dialog){"PLAY", lib->message, {"PLAY", "INSTALL AGAIN", "CANCEL"}, 0, 2}
+                : (ui_dialog){"PLAY", lib->message, {"PLAY", "DELETE", "CANCEL"}, 0, 2};
+    } else if (what == UI_LIB_NAS_USE) {
+        /* Name exactly the folder that's added: the one browsed, or the highlighted one. */
+        const char *where = lib->browse_title != NULL ? lib->browse_title : "";
+        int e = lib->nas_pick;
+        if (e >= 0 && e < lib->browse_count) {
+            (void)snprintf(lib->message, sizeof lib->message,
+                           "Add %s%s%s to GAMES? Its images and game folders, and those one "
+                           "folder down, are listed there.",
+                           where, where[0] != '\0' ? " > " : "", lib->browse[e].name);
+        } else {
+            (void)snprintf(lib->message, sizeof lib->message,
+                           "Add %s to GAMES? Its images and game folders, and those one folder "
+                           "down, are listed there.",
+                           where[0] != '\0' ? where : "this folder");
+        }
+        lib->dialog = (ui_dialog){"ADD NAS FOLDER", lib->message, {"ADD", "CANCEL", NULL}, 0, 1};
     } else if (what == UI_LIB_SOURCE_KIND) {
         /* Three choices and no CANCEL: B gives 3, a choice past them, which adds nothing. */
         lib->dialog = (ui_dialog){"ADD SOURCE",
@@ -297,6 +544,18 @@ static void open_kbd(ui_library *lib, ui_lib_typing what)
         ui_kbd_open(&lib->kbd, labels[lib->add_kind], lib->add_url, sizeof lib->add_url, false);
     } else if (what == UI_LIB_TYPING_TITLE_ID) {
         ui_kbd_open(&lib->kbd, "TITLE ID, LIKE 4D530004", lib->add_key, sizeof lib->add_key, false);
+    } else if (what == UI_LIB_TYPING_NAS_ADDRESS) {
+        if (lib->nas_addr[0] == '\0') {
+            (void)snprintf(lib->nas_addr, sizeof lib->nas_addr, "%s", "192.168.1.");
+        }
+        ui_kbd_open(&lib->kbd, "NAS ADDRESS, LIKE 192.168.1.50", lib->nas_addr,
+                    sizeof lib->nas_addr, false);
+    } else if (what == UI_LIB_TYPING_NAS_USER) {
+        ui_kbd_open(&lib->kbd, "NAS USER NAME (NONE FOR A GUEST)", lib->nas_user,
+                    sizeof lib->nas_user, false);
+    } else if (what == UI_LIB_TYPING_NAS_PASSWORD) {
+        ui_library_forget_nas_password(lib);
+        ui_kbd_open(&lib->kbd, "NAS PASSWORD", lib->nas_password, sizeof lib->nas_password, true);
     } else {
         ui_library_forget_password(lib);
         ui_kbd_open(&lib->kbd, "ARCHIVE.ORG PASSWORD", lib->password, sizeof lib->password, true);
@@ -324,6 +583,19 @@ static ui_lib_action typed(ui_library *lib, ui_kbd_result r, int rows)
             return UI_LIB_LOGIN; /* the caller logs in, then forgets the password */
         }
         ui_library_forget_password(lib);
+    } else if (what == UI_LIB_TYPING_NAS_PASSWORD) {
+        if (r == UI_KBD_DONE) {
+            return UI_LIB_NAS_LOGIN; /* an empty password is a password too */
+        }
+        ui_library_forget_nas_password(lib);
+    } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_NAS_ADDRESS && lib->nas_addr[0] != '\0') {
+        open_kbd(lib, UI_LIB_TYPING_NAS_USER);
+    } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_NAS_USER) {
+        if (lib->nas_user[0] == '\0') {
+            ui_library_forget_nas_password(lib);
+            return UI_LIB_NAS_LOGIN; /* as a guest */
+        }
+        open_kbd(lib, UI_LIB_TYPING_NAS_PASSWORD);
     } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_EMAIL && lib->email[0] != '\0') {
         open_kbd(lib, UI_LIB_TYPING_PASSWORD);
     } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_SOURCE && lib->add_url[0] != '\0') {
@@ -384,6 +656,51 @@ static void source_kind(ui_library *lib, int c)
 /* A press in SETTINGS' list, or in one of its pages. */
 static ui_lib_action settings_input(ui_library *lib, ui_button b, int rows)
 {
+    if (lib->page == UI_LIB_PAGE_NAS) {
+        int n = nas_line(lib, lib->nas_list.cur);
+        if (b == UI_BTN_B) {
+            lib->page = UI_LIB_PAGE_NONE;
+        } else if (b == UI_BTN_A && n == NAS_FIND) {
+            return UI_LIB_NAS_SCAN;
+        } else if (b == UI_BTN_A && n == NAS_TYPE) {
+            open_kbd(lib, UI_LIB_TYPING_NAS_ADDRESS);
+        } else if ((b == UI_BTN_A || b == UI_BTN_X) && n >= 0) {
+            const ui_lib_nas *nas = &lib->nas[n];
+            (void)snprintf(lib->nas_addr, sizeof lib->nas_addr, "%s", nas->address);
+            if (b == UI_BTN_A && nas->login != NULL) {
+                return UI_LIB_NAS_SAVED;
+            }
+            /* Someone else (X), or no login yet: the user name, the saved one to start from. */
+            (void)snprintf(lib->nas_user, sizeof lib->nas_user, "%s",
+                           nas->login != NULL && strcmp(nas->login, "a guest") != 0 ? nas->login
+                                                                                    : "");
+            open_kbd(lib, UI_LIB_TYPING_NAS_USER);
+        } else {
+            (void)ui_list_input(&lib->nas_list, b, rows);
+        }
+        return UI_LIB_NONE;
+    }
+    if (lib->page == UI_LIB_PAGE_BROWSE) {
+        int e = ui_library_browse_entry(lib);
+        if (b == UI_BTN_B) {
+            return UI_LIB_NAS_UP;
+        }
+        if (b == UI_BTN_A && lib->browse_list.count > 0 && e < 0) {
+            lib->nas_pick = -1;
+            ask(lib, UI_LIB_NAS_USE);
+            return UI_LIB_NONE;
+        }
+        if (b == UI_BTN_A && lib->browse_list.count > 0) {
+            return UI_LIB_NAS_OPEN;
+        }
+        if (b == UI_BTN_X && e >= 0 && e < lib->browse_count) {
+            lib->nas_pick = e; /* add the highlighted folder without opening it */
+            ask(lib, UI_LIB_NAS_USE);
+            return UI_LIB_NONE;
+        }
+        (void)ui_list_input(&lib->browse_list, b, rows);
+        return UI_LIB_NONE;
+    }
     if (lib->page == UI_LIB_PAGE_SOURCES) {
         if (b == UI_BTN_B) {
             lib->page = UI_LIB_PAGE_NONE;
@@ -419,6 +736,9 @@ static ui_lib_action settings_input(ui_library *lib, ui_button b, int rows)
         choose_folder(lib, rows);
     } else if (lib->settings_list.cur == UI_LIB_SETTING_SOURCES) {
         lib->page = UI_LIB_PAGE_SOURCES;
+    } else if (lib->settings_list.cur == UI_LIB_SETTING_NAS) {
+        lib->page = UI_LIB_PAGE_NAS;
+        return UI_LIB_NAS_PAGE;
     } else {
         lib->page = UI_LIB_PAGE_LOGINS;
     }
@@ -438,10 +758,35 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
             source_kind(lib, c);
             return UI_LIB_NONE;
         }
+        if (what == UI_LIB_PLAY && lib->section == UI_LIB_GAMES && c == 1) {
+            lib->to_apps = lib->items[ui_library_game(lib)].app;
+            return UI_LIB_INSTALL; /* INSTALL AGAIN */
+        }
+        if ((what == UI_LIB_PLAY && lib->section != UI_LIB_GAMES && c == 1) ||
+            (what == UI_LIB_INSTALL && unfinished(&lib->items[ui_library_game(lib)]) && c == 1)) {
+            ask(lib, UI_LIB_DELETE); /* DELETE: asked once more */
+            return UI_LIB_NONE;
+        }
+        if (what == UI_LIB_INSTALL && (c == 0 || c == 1)) {
+            const ui_lib_item *it = &lib->items[ui_library_game(lib)];
+            /* INSTALL goes where the item suggests, the other button to the other folder. A
+               game that isn't finished carries on where it is (the caller knows where). */
+            lib->to_apps = unfinished(it) ? it->app : (c == 0) == it->app;
+            return UI_LIB_INSTALL;
+        }
         return c == 0 && what != UI_LIB_TELL ? what : UI_LIB_NONE;
     }
     if (lib->typing_for != UI_LIB_TYPING_NONE) {
         return typed(lib, ui_kbd_input(&lib->kbd, b), rows);
+    }
+    if ((b == UI_BTN_WHITE || b == UI_BTN_BLACK) && lib->section != UI_LIB_SETTINGS) {
+        /* The details' text a line up or down; draw_detail keeps it in range. */
+        if (b == UI_BTN_WHITE && lib->detail_scroll > 0) {
+            lib->detail_scroll--;
+        } else if (b == UI_BTN_BLACK && lib->detail_lines > lib->detail_fit) {
+            lib->detail_scroll++;
+        }
+        return UI_LIB_NONE;
     }
     if (b == UI_BTN_Y) {
         (void)snprintf(lib->typing, sizeof lib->typing, "%s", lib->query);
@@ -461,14 +806,20 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
         lib->page = UI_LIB_PAGE_NONE;
     } else if (lib->section == UI_LIB_GAMES) {
         if (b == UI_BTN_A && lib->list.count > 0) {
-            ask(lib, UI_LIB_INSTALL);
+            bool installed = lib->items[ui_library_game(lib)].state == UI_LIB_INSTALLED;
+            ask(lib, installed ? UI_LIB_PLAY : UI_LIB_INSTALL);
         } else if (b == UI_BTN_B && lib->query[0] != '\0') {
             lib->query[0] = '\0';
             search(lib, rows);
         } else {
             (void)ui_list_input(&lib->list, b, rows);
         }
-    } else if (lib->section == UI_LIB_INSTALLED_GAMES && b != UI_BTN_A) {
+    } else if (lib->section == UI_LIB_INSTALLED_GAMES && b == UI_BTN_A) {
+        if (lib->installed_count > 0) {
+            bool done = lib->installed[ui_library_installed(lib)].state == UI_LIB_INSTALLED;
+            ask(lib, done ? UI_LIB_PLAY : UI_LIB_DELETE);
+        }
+    } else if (lib->section == UI_LIB_INSTALLED_GAMES) {
         (void)ui_list_input(&lib->installed_list, b, rows);
     } else if (lib->section == UI_LIB_SETTINGS) {
         return settings_input(lib, b, rows);
@@ -504,12 +855,149 @@ static void draw_sections(const ui_draw *d, const ui_library *lib)
     }
 }
 
+#define DISK_BAR_H 5   /* the bar under a drive's line */
+#define DISK_BAR_GAP 2 /* above and below it */
+#define DISK_GAP 4     /* between drives */
+
+/* How much of drive k is used, as a bar w wide. */
+static void draw_disk_bar(const ui_draw *d, int x, int y, int w, const ui_lib_disk *k)
+{
+    d->fill(d->ctx, (ui_rect){x, y, w, DISK_BAR_H}, ui_col_idle);
+    uint64_t used = k->free_bytes < k->total_bytes ? k->total_bytes - k->free_bytes : 0U;
+    int u = (int)(used * (uint64_t)w / k->total_bytes);
+    if (u == 0 && used > 0U) {
+        u = 1; /* a drive with anything on it never looks empty */
+    }
+    if (u > 0) {
+        d->fill(d->ctx, (ui_rect){x, y, u, DISK_BAR_H}, ui_col_border);
+    }
+}
+
+/* INSTALLED's summary: each drive's free space and a bar of what's used, then its size if
+   every drive's fits. Drives that don't fit are left out. */
+static void draw_disks(const ui_draw *d, const ui_library *lib, int x, int y, int w)
+{
+    int sh = d->line_height(d->ctx, UI_FONT_SMALL);
+    int bottom = summary.y + summary.h - PAD;
+    int n = lib->disk_count;
+    int with_size = sh + DISK_BAR_GAP + DISK_BAR_H + DISK_BAR_GAP + sh;
+    bool sizes = n * with_size + (n - 1) * DISK_GAP <= bottom - y;
+    char size[24];
+    char line[48];
+    for (int i = 0; i < n && y + sh <= bottom; i++) {
+        const ui_lib_disk *k = &lib->disks[i];
+        ui_format_size(size, sizeof size, k->free_bytes);
+        (void)snprintf(line, sizeof line, "%s %s free", k->name != NULL ? k->name : "", size);
+        (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_text, line);
+        y += sh;
+        if (k->total_bytes > 0U && y + DISK_BAR_GAP + DISK_BAR_H <= bottom) {
+            draw_disk_bar(d, x, y + DISK_BAR_GAP, w, k);
+            y += DISK_BAR_GAP + DISK_BAR_H;
+            if (sizes) {
+                ui_format_size(size, sizeof size, k->total_bytes);
+                (void)snprintf(line, sizeof line, "of %s", size);
+                (void)ui_text_fit(d, UI_FONT_SMALL, x, y + DISK_BAR_GAP, w, ui_col_dim, line);
+                y += DISK_BAR_GAP + sh;
+            }
+        }
+        y += DISK_GAP;
+    }
+}
+
+#define PAIR_GAP 6   /* between a label and its value */
+#define ITEM_GAP 16  /* between one pair and the next */
+#define TOP_BAR_W 48 /* a drive's bar when there are several */
+
+/* The width of "LABEL value" in the small font. */
+static int pair_width(const ui_draw *d, const char *label, const char *value)
+{
+    return d->text_width(d->ctx, UI_FONT_SMALL, label, strlen(label)) + PAIR_GAP +
+           d->text_width(d->ctx, UI_FONT_SMALL, value, strlen(value));
+}
+
+/* "LABEL value" in at most w pixels, the label dim; returns the width drawn. */
+static int draw_pair(const ui_draw *d, int x, int y, int w, const char *label, const char *value,
+                     ui_color c)
+{
+    int lw = ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, label);
+    if (lw + PAIR_GAP >= w) {
+        return lw;
+    }
+    return lw + PAIR_GAP +
+           ui_text_fit(d, UI_FONT_SMALL, x + lw + PAIR_GAP, y, w - lw - PAIR_GAP, c, value);
+}
+
+/* The top panel: the console's address left and the NAS's right, then each drive's free space
+   with a bar of how full it is (one drive: its size too, and the bar takes the rest). */
+static void draw_top(const ui_draw *d, const ui_library *lib)
+{
+    ui_panel(d, top_box, UI_CHAMFER, ui_col_panel, ui_col_border);
+    int sh = d->line_height(d->ctx, UI_FONT_SMALL);
+    int x = top_box.x + 16;
+    int right = top_box.x + top_box.w - 16;
+    int y = top_box.y + (top_box.h - 2 * sh) / 2;
+
+    const char *xbox = lib->top.xbox != NULL && lib->top.xbox[0] != '\0' ? lib->top.xbox : "-";
+    char nas[UI_LIB_NAS_ADDR_MAX + 8];
+    (void)snprintf(nas, sizeof nas, "%s%s", lib->top.nas != NULL ? lib->top.nas : "none",
+                   lib->top.nas != NULL && lib->top.nas_off ? " off" : "");
+    int xw = pair_width(d, "XBOX", xbox);
+    int nw = pair_width(d, "NAS", nas);
+    int room = right - x - ITEM_GAP;
+    if (xw + nw > room) { /* too long for both: each gets half, or what the other leaves */
+        int half = room / 2;
+        if (xw <= half) {
+            nw = room - xw;
+        } else if (nw <= half) {
+            xw = room - nw;
+        } else {
+            xw = half;
+            nw = room - half;
+        }
+    }
+    (void)draw_pair(d, x, y, xw, "XBOX", xbox, ui_col_text);
+    (void)draw_pair(d, right - nw, y, nw, "NAS", nas,
+                    lib->top.nas != NULL && lib->top.nas_off ? ui_col_accent : ui_col_text);
+
+    y += sh;
+    if (lib->disk_count == 0) {
+        (void)draw_pair(d, x, y, right - x, "DRIVE", "space not read", ui_col_dim);
+        return;
+    }
+    int cx = x;
+    for (int i = 0; i < lib->disk_count && cx < right; i++) {
+        const ui_lib_disk *k = &lib->disks[i];
+        char free_s[24];
+        char total_s[24];
+        char value[64];
+        ui_format_size(free_s, sizeof free_s, k->free_bytes);
+        if (lib->disk_count == 1 && k->total_bytes > 0U) {
+            ui_format_size(total_s, sizeof total_s, k->total_bytes);
+            (void)snprintf(value, sizeof value, "%s free of %s", free_s, total_s);
+        } else {
+            (void)snprintf(value, sizeof value, "%s free", free_s);
+        }
+        cx += draw_pair(d, cx, y, right - cx, k->name != NULL ? k->name : "", value, ui_col_text);
+        int bw = lib->disk_count == 1 ? right - cx - 12 : TOP_BAR_W;
+        if (k->total_bytes > 0U && bw >= 24 && cx + 8 + bw <= right) {
+            draw_disk_bar(d, cx + 8, y + (sh - DISK_BAR_H) / 2 + 1, bw, k);
+            cx += 8 + bw;
+        }
+        cx += ITEM_GAP;
+    }
+}
+
 static void draw_summary(const ui_draw *d, const ui_library *lib)
 {
     ui_panel(d, summary, UI_CHAMFER, ui_col_panel, ui_col_border);
     int x = summary.x + 14;
     int w = summary.w - 24;
     int y = summary.y + PAD;
+    if (lib->section == UI_LIB_INSTALLED_GAMES && lib->disk_count > 0) {
+        (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, ui_col_accent, "HARD DRIVE");
+        draw_disks(d, lib, x, y + d->line_height(d->ctx, UI_FONT_LABEL) + 4, w);
+        return;
+    }
     (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, ui_col_accent, "SUMMARY");
     y += d->line_height(d->ctx, UI_FONT_LABEL) + 4;
     int installed = 0;
@@ -534,22 +1022,66 @@ static void draw_summary(const ui_draw *d, const ui_library *lib)
     }
 }
 
-static void draw_detail(const ui_draw *d, const ui_lib_item *it)
+/* The about text from its line `skip` on, wrapped into r; returns how many lines it has in
+   all at r's width. */
+static int draw_about(const ui_draw *d, ui_rect r, int skip, const char *s)
+{
+    size_t n = strlen(s);
+    size_t at = 0;
+    int lines = 0;
+    size_t from = n;
+    while (at < n) {
+        if (lines == skip) {
+            from = at;
+        }
+        size_t next = 0;
+        (void)ui_wrap(d, UI_FONT_SMALL, s + at, n - at, r.w, &next);
+        at += next > 0 ? next : 1;
+        lines++;
+    }
+    if (from < n && r.h > 0) {
+        (void)ui_text_wrap(d, UI_FONT_SMALL, r, ui_col_dim, s + from);
+    }
+    return lines;
+}
+
+static void draw_detail(const ui_draw *d, ui_library *lib, const ui_lib_item *it)
 {
     ui_panel(d, detail, UI_CHAMFER, ui_col_panel, ui_col_border);
+    lib->detail_lines = 0;
+    lib->detail_fit = 0;
+    if (it != lib->detail_of) {
+        lib->detail_of = it;
+        lib->detail_scroll = 0;
+    }
     if (it == NULL) {
         return;
     }
+    const ui_lib_art *art = shown_art(lib);
     int x = detail.x + PAD + 4;
     int w = detail.w - 2 * PAD - 4;
     int y = detail.y + PAD;
     int bottom = detail.y + detail.h - PAD;
+    if (art != NULL && art->px != NULL && art->w > 0 && art->h > 0) {
+        /* The picture, centred at the top, cut to the largest it may be. */
+        int pw = art->w < UI_LIB_ART_W ? art->w : UI_LIB_ART_W;
+        int ph = art->h < UI_LIB_ART_H ? art->h : UI_LIB_ART_H;
+        ui_rect box = {detail.x + (detail.w - pw) / 2, y, pw, ph};
+        d->clip(d->ctx, &box);
+        d->pixels(d->ctx, art->px, art->w, art->h, box.x, box.y);
+        d->clip(d->ctx, NULL);
+        y += ph + 8;
+    }
+    const char *name =
+        art != NULL && art->title != NULL && art->title[0] != '\0' ? art->title : it->name;
+    const char *facts = art != NULL && art->facts != NULL ? art->facts : it->facts;
+    const char *about = art != NULL && art->about != NULL ? art->about : it->about;
     /* The name on up to two lines. */
     int bh = d->line_height(d->ctx, UI_FONT_BOLD);
-    y += ui_text_wrap(d, UI_FONT_BOLD, (ui_rect){x, y, w, 2 * bh}, ui_col_accent, it->name) * bh;
+    y += ui_text_wrap(d, UI_FONT_BOLD, (ui_rect){x, y, w, 2 * bh}, ui_col_accent, name) * bh;
     int sh = d->line_height(d->ctx, UI_FONT_SMALL);
-    if (it->facts != NULL && it->facts[0] != '\0') {
-        (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, it->facts);
+    if (facts != NULL && facts[0] != '\0') {
+        (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, facts);
         y += sh;
     }
     y += 6;
@@ -567,8 +1099,16 @@ static void draw_detail(const ui_draw *d, const ui_lib_item *it)
         }
         y += 6;
     }
-    if (it->about != NULL && y < bottom) {
-        (void)ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, bottom - y}, ui_col_dim, it->about);
+    if (about != NULL && y < bottom) {
+        /* White and Black move it a line at a time when it doesn't all fit. */
+        lib->detail_fit = sh > 0 ? (bottom - y) / sh : 0;
+        int total = draw_about(d, (ui_rect){x, y, w, 0}, 0, about);
+        int most = total > lib->detail_fit ? total - lib->detail_fit : 0;
+        if (lib->detail_scroll > most) {
+            lib->detail_scroll = most;
+        }
+        lib->detail_lines =
+            draw_about(d, (ui_rect){x, y, w, bottom - y}, lib->detail_scroll, about);
     }
 }
 
@@ -576,7 +1116,7 @@ static const char *setting_name(void *ctx, int i)
 {
     (void)ctx;
     static const char *const names[UI_LIB_SETTING_COUNT_] = {"Install location", "Authentication",
-                                                             "Map sources"};
+                                                             "Map sources", "NAS"};
     return names[i];
 }
 
@@ -682,6 +1222,117 @@ static void draw_sources(const ui_draw *d, const ui_library *lib)
     }
 }
 
+static const char *nas_name(void *ctx, int i)
+{
+    const ui_library *lib = ctx;
+    int n = nas_line(lib, i);
+    return n == NAS_FIND   ? "Find a NAS on the network"
+           : n == NAS_TYPE ? "Type a NAS address"
+                           : lib->nas[n].name;
+}
+
+static const char *browse_name(void *ctx, int i)
+{
+    const ui_library *lib = ctx;
+    if (lib->browse_use != NULL) {
+        if (i == 0) {
+            return lib->browse_use;
+        }
+        i--;
+    }
+    return lib->browse[i].name;
+}
+
+/* NAS's details: the line in SETTINGS, the NAS page's line, or where browsing is. The last
+   line says where the console is on the network, when the caller has said. */
+static void draw_nas(const ui_draw *d, const ui_library *lib)
+{
+    int x = detail.x + PAD + 4;
+    int w = detail.w - 2 * PAD - 4;
+    int y = detail.y + PAD;
+    int bottom = detail.y + detail.h - PAD;
+    int bh = d->line_height(d->ctx, UI_FONT_BOLD);
+    int sh = d->line_height(d->ctx, UI_FONT_SMALL);
+    if (lib->console_line != NULL && lib->console_line[0] != '\0') {
+        bottom -= sh;
+        (void)ui_text_fit(d, UI_FONT_SMALL, x, bottom, w, ui_col_accent, lib->console_line);
+        bottom -= 6;
+    }
+    const char *title = "NAS";
+    const char *note = NULL;
+    const char *text = "Games on your NAS: find it on the network, log in once, and add the "
+                       "folder your games are in. A starts.";
+    const char *more = "Its images (.iso, .xiso, .zip) and game folders (with a default.xbe) "
+                       "are listed in GAMES and install from it over the network.";
+    char line[160];
+    if (lib->page == UI_LIB_PAGE_NAS) {
+        int n = nas_line(lib, lib->nas_list.cur);
+        if (n == NAS_FIND) {
+            title = "Find a NAS on the network";
+            text = "Asks every address of this network for file sharing (SMB), a few at a time. "
+                   "It takes about ten seconds.";
+            more = lib->nas_status;
+        } else if (n == NAS_TYPE) {
+            title = "Type a NAS address";
+            text = "The NAS's IP address, like 192.168.1.50, as its settings or your router "
+                   "show it. Add :port for another port than 445.";
+            more = "Then its user name and password. The login is saved for next time.";
+        } else {
+            const ui_lib_nas *nas = &lib->nas[n];
+            title = nas->name;
+            note = nas->note;
+            if (nas->login != NULL) {
+                (void)snprintf(line, sizeof line,
+                               "Logged in as %s before: A opens its shared folders. X logs in "
+                               "as someone else.",
+                               nas->login);
+                text = line;
+            } else {
+                text = "A logs in: its user name, then its password. No user name logs in as a "
+                       "guest. The login is saved, so you type it once.";
+            }
+            more = "Only the password's NT hash is kept, in E:\\Apps\\xcat\\credentials. "
+                   "SETTINGS > Authentication removes it.";
+        }
+    } else if (lib->page == UI_LIB_PAGE_BROWSE) {
+        int e = ui_library_browse_entry(lib);
+        const char *where = lib->browse_title != NULL ? lib->browse_title : "";
+        if (e < 0) {
+            title = where;
+            text = lib->browse_about;
+            more = "A adds this folder to GAMES (it asks first). B goes up.";
+        } else if (e < lib->browse_count) {
+            title = lib->browse[e].name;
+            note = lib->browse[e].note;
+            if (lib->browse_use == NULL) {
+                text = "A opens this shared folder. X adds all of it to GAMES.";
+            } else {
+                text = "A opens it. X adds it to GAMES without opening it: its images and game "
+                       "folders, and those one folder down.";
+            }
+            (void)snprintf(line, sizeof line, "In %s. B goes up.", where);
+            more = line;
+        } else {
+            title = where;
+            text = lib->browse_about;
+            more = "B goes up.";
+        }
+    }
+    y += ui_text_wrap(d, UI_FONT_BOLD, (ui_rect){x, y, w, 2 * bh}, ui_col_accent, title) * bh;
+    if (note != NULL && note[0] != '\0') {
+        (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, note);
+        y += sh;
+    }
+    y += 6;
+    if (text != NULL && y < bottom) {
+        y += ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, 8 * sh}, ui_col_text, text) * sh;
+        y += 6;
+    }
+    if (more != NULL && y < bottom) {
+        (void)ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, bottom - y}, ui_col_dim, more);
+    }
+}
+
 static const char *host_name(void *ctx, int i)
 {
     const ui_library *lib = ctx;
@@ -750,8 +1401,33 @@ static void draw_logins(const ui_draw *d, const ui_library *lib)
 
 /* The list of the section shown. In the sections, the D-pad moves between them, so its
    highlight is drawn dim. */
+bool ui_library_tick(ui_library *lib, uint32_t now_ms)
+{
+    lib->now_ms = now_ms;
+    return lib->slide_over > 0 &&
+           ui_slide_offset(now_ms - lib->slide_since, lib->slide_over) != lib->slide_px;
+}
+
+/* The list in the list panel, its highlighted line sliding if it's too wide and the buttons
+   move it. */
+static void draw_lines(const ui_draw *d, ui_library *lib, const ui_list *l, ui_list_line *line,
+                       void *ctx)
+{
+    bool still =
+        lib->in_sections || lib->asking != UI_LIB_NONE || lib->typing_for != UI_LIB_TYPING_NONE;
+    if (l != lib->slide_list || l->cur != lib->slide_cur || still) {
+        lib->slide_list = still ? NULL : l;
+        lib->slide_cur = l->cur;
+        lib->slide_since = lib->now_ms;
+    }
+    lib->slide_over = still ? 0 : ui_list_overflow(d, l, list_in, line, ctx);
+    lib->slide_px = ui_slide_offset(lib->now_ms - lib->slide_since, lib->slide_over);
+    ui_list_draw_slid(d, l, list_in, line, ctx, lib->in_sections, lib->slide_px);
+}
+
 static void draw_list(const ui_draw *d, ui_library *lib)
 {
+    lib->slide_over = 0; /* a list drawn below sets it */
     ui_panel(d, list, UI_CHAMFER, ui_col_panel, ui_col_border);
     if (lib->section == UI_LIB_INSTALLED_GAMES) {
         if (lib->installed_count == 0) {
@@ -759,19 +1435,28 @@ static void draw_list(const ui_draw *d, ui_library *lib)
                                "Nothing installed yet. Games go to the install location in "
                                "SETTINGS.");
         } else {
-            ui_list_draw(d, &lib->installed_list, list_in, installed_name, lib, lib->in_sections);
+            draw_lines(d, lib, &lib->installed_list, installed_name, lib);
         }
         return;
     }
     if (lib->section == UI_LIB_SETTINGS) {
         if (lib->page == UI_LIB_PAGE_FOLDERS) {
-            ui_list_draw(d, &lib->folder_list, list_in, folder_name, lib, lib->in_sections);
+            draw_lines(d, lib, &lib->folder_list, folder_name, lib);
         } else if (lib->page == UI_LIB_PAGE_LOGINS) {
-            ui_list_draw(d, &lib->host_list, list_in, host_name, lib, lib->in_sections);
+            draw_lines(d, lib, &lib->host_list, host_name, lib);
         } else if (lib->page == UI_LIB_PAGE_SOURCES) {
-            ui_list_draw(d, &lib->source_list, list_in, source_name, lib, lib->in_sections);
+            draw_lines(d, lib, &lib->source_list, source_name, lib);
+        } else if (lib->page == UI_LIB_PAGE_NAS) {
+            draw_lines(d, lib, &lib->nas_list, nas_name, lib);
+        } else if (lib->page == UI_LIB_PAGE_BROWSE) {
+            if (lib->browse_list.count == 0) {
+                (void)ui_text_wrap(d, UI_FONT_BODY, list_in, ui_col_dim,
+                                   "Nothing here this login can open. B goes back.");
+            } else {
+                draw_lines(d, lib, &lib->browse_list, browse_name, lib);
+            }
         } else {
-            ui_list_draw(d, &lib->settings_list, list_in, setting_name, NULL, lib->in_sections);
+            draw_lines(d, lib, &lib->settings_list, setting_name, NULL);
         }
         return;
     }
@@ -789,7 +1474,7 @@ static void draw_list(const ui_draw *d, ui_library *lib)
         (void)ui_text_wrap(d, UI_FONT_BODY, list_in, ui_col_dim, line);
         return;
     }
-    ui_list_draw(d, &lib->list, list_in, item_name, lib, lib->in_sections);
+    draw_lines(d, lib, &lib->list, item_name, lib);
 }
 
 /* While GAMES is searched: what for, and how many games match. */
@@ -827,6 +1512,18 @@ static const char *hints(const ui_library *lib)
                : h->login != NULL           ? "A remove login  B back  Left sections  Back exit"
                                             : "A how to add one  B back  Left sections  Back exit";
     }
+    if (lib->section == UI_LIB_SETTINGS && lib->page == UI_LIB_PAGE_NAS) {
+        int n = nas_line(lib, lib->nas_list.cur);
+        return n == NAS_FIND               ? "A find  B back  Left sections  Back exit"
+               : n == NAS_TYPE             ? "A type it  B back  Left sections  Back exit"
+               : lib->nas[n].login != NULL ? "A open  X other login  B back  Left sections"
+                                           : "A log in  B back  Left sections  Back exit";
+    }
+    if (lib->section == UI_LIB_SETTINGS && lib->page == UI_LIB_PAGE_BROWSE) {
+        return ui_library_browse_entry(lib) < 0 ? "A add this folder  B up  Left sections"
+               : lib->browse_count > 0          ? "A open  X add it  B up  LT RT page"
+                                                : "B up  Left sections  Back exit";
+    }
     if (lib->section == UI_LIB_SETTINGS && lib->page == UI_LIB_PAGE_SOURCES) {
         return ui_library_source(lib) < 0 ? "A add  B back  Left sections  Back exit"
                                           : "A remove  B back  Left sections  Back exit";
@@ -836,10 +1533,23 @@ static const char *hints(const ui_library *lib)
                    ? "A change  Left sections  Y search  Back exit"
                : lib->settings_list.cur == UI_LIB_SETTING_SOURCES
                    ? "A list, add, remove  Left sections  Y search  Back exit"
+               : lib->settings_list.cur == UI_LIB_SETTING_NAS
+                   ? "A find a NAS  Left sections  Y search  Back exit"
                    : "A servers and logins  Left sections  Y search  Back exit";
+    }
+    if (lib->section == UI_LIB_INSTALLED_GAMES) {
+        if (lib->installed_count > 0 &&
+            lib->installed[ui_library_installed(lib)].state != UI_LIB_INSTALLED) {
+            return "A delete  LT RT page  Left sections  Y search  Back exit";
+        }
+        return "A play or delete  LT RT page  Left sections  Y search  Back exit";
     }
     if (lib->section != UI_LIB_GAMES) {
         return "LT RT page  Left sections  Y search  Back exit";
+    }
+    int g = ui_library_game(lib);
+    if (g >= 0 && unfinished(&lib->items[g])) {
+        return "A carry on or delete  Y search  LT RT page  Left sections";
     }
     return lib->query[0] != '\0' ? "A install  B list all  Y search  LT RT page  Left sections"
                                  : "A install  Y search  LT RT page  Left sections  Back exit";
@@ -848,8 +1558,8 @@ static const char *hints(const ui_library *lib)
 static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *status)
 {
     bool searched = lib->query[0] != '\0';
-    const ui_rect panels[] = {tab, nav, summary, list, detail, footer, search_box};
-    ui_background_under(d, pan, panels, (int)(sizeof panels / sizeof panels[0]) - !searched);
+    const ui_rect panels[] = {tab, nav, summary, list, detail, footer, top_box};
+    ui_background_under(d, pan, panels, (int)(sizeof panels / sizeof panels[0]));
 
     ui_panel(d, tab, UI_CHAMFER, ui_col_panel, ui_col_border);
     int th = d->line_height(d->ctx, UI_FONT_TITLE);
@@ -858,6 +1568,8 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
 
     if (searched) {
         draw_search(d, lib);
+    } else {
+        draw_top(d, lib);
     }
     draw_sections(d, lib);
     draw_summary(d, lib);
@@ -871,11 +1583,14 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
         } else if (lib->page == UI_LIB_PAGE_SOURCES ||
                    (on_line && line == UI_LIB_SETTING_SOURCES)) {
             draw_sources(d, lib);
+        } else if (lib->page == UI_LIB_PAGE_NAS || lib->page == UI_LIB_PAGE_BROWSE ||
+                   (on_line && line == UI_LIB_SETTING_NAS)) {
+            draw_nas(d, lib);
         } else {
             draw_logins(d, lib);
         }
     } else {
-        draw_detail(d, current(lib));
+        draw_detail(d, lib, current(lib));
     }
 
     ui_panel(d, footer, 0, ui_col_panel, ui_col_border);
@@ -884,8 +1599,12 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
     if (status != NULL) {
         (void)ui_text_fit(d, UI_FONT_SMALL, footer.x + 12, by, footer.w - 24, ui_col_text, status);
     }
-    (void)ui_text_fit(d, UI_FONT_SMALL, footer.x + 12, by + sh, footer.w - 24, ui_col_dim,
-                      hints(lib));
+    char hint[160];
+    (void)snprintf(hint, sizeof hint, "%s%s", hints(lib),
+                   lib->section != UI_LIB_SETTINGS && lib->detail_lines > lib->detail_fit
+                       ? "  White Black more"
+                       : "");
+    (void)ui_text_fit(d, UI_FONT_SMALL, footer.x + 12, by + sh, footer.w - 24, ui_col_dim, hint);
 }
 
 const char *ui_library_screen(const ui_library *lib)
@@ -903,6 +1622,12 @@ const char *ui_library_screen(const ui_library *lib)
         return "keyboard-source";
     case UI_LIB_TYPING_TITLE_ID:
         return "keyboard-title-id";
+    case UI_LIB_TYPING_NAS_ADDRESS:
+        return "keyboard-nas-address";
+    case UI_LIB_TYPING_NAS_USER:
+        return "keyboard-nas-user";
+    case UI_LIB_TYPING_NAS_PASSWORD:
+        return "keyboard-nas-password";
     case UI_LIB_TYPING_NONE:
         break;
     }
@@ -919,6 +1644,12 @@ const char *ui_library_screen(const ui_library *lib)
         return "ask-remove";
     case UI_LIB_SOURCE_KIND:
         return "ask-kind";
+    case UI_LIB_PLAY:
+        return "ask-play";
+    case UI_LIB_DELETE:
+        return "ask-delete";
+    case UI_LIB_NAS_USE:
+        return "ask-nas-use";
     case UI_LIB_TELL:
         return "message";
     default:
@@ -931,6 +1662,8 @@ const char *ui_library_screen(const ui_library *lib)
         return lib->page == UI_LIB_PAGE_FOLDERS   ? "folders"
                : lib->page == UI_LIB_PAGE_LOGINS  ? "logins"
                : lib->page == UI_LIB_PAGE_SOURCES ? "sources"
+               : lib->page == UI_LIB_PAGE_NAS     ? "nas"
+               : lib->page == UI_LIB_PAGE_BROWSE  ? "nas-browse"
                                                   : "settings";
     default:
         return "games";

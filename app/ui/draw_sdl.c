@@ -386,6 +386,23 @@ static void sdl_image(void *ctx, ui_image img, ui_rect src, int x, int y)
     drawing.copy_us += now_us() - start;
 }
 
+static void sdl_pixels(void *ctx, const uint32_t *px, int w, int h, int x, int y)
+{
+    (void)ctx;
+    SDL_Rect to = {x, y, w, h};
+    SDL_Rect dst = to;
+    if (px == NULL || w <= 0 || h <= 0 || !clipped(&dst)) {
+        return;
+    }
+    SDL_Surface *out = drawn();
+    uint32_t start = now_us();
+    for (int row = 0; row < dst.h; row++) {
+        const uint32_t *from = px + (size_t)(dst.y - y + row) * (size_t)w + (dst.x - x);
+        copy_px(pixel(out, dst.x, dst.y + row), from, (size_t)dst.w);
+    }
+    drawing.copy_us += now_us() - start;
+}
+
 static void sdl_image_size(void *ctx, ui_image img, int *w, int *h)
 {
     (void)ctx;
@@ -536,6 +553,7 @@ bool ui_sdl_open(ui_draw *d, const char *asset_dir, const char **why)
     d->image_size = sdl_image_size;
     d->save_backdrop = sdl_save_backdrop;
     d->backdrop = sdl_backdrop;
+    d->pixels = sdl_pixels;
     return true;
 }
 

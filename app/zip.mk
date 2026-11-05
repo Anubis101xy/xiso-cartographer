@@ -5,7 +5,8 @@
 
 MINIZ_DIR := $(ROOT_DIR)/third_party/miniz
 MINIZ_SRC := $(MINIZ_DIR)/miniz_tinfl.c
-ZIP_SRCS := $(CORE_DIR)/src/zip.c $(CORE_DIR)/src/zip_read.c $(CORE_DIR)/src/seq.c
+ZIP_SRCS := $(CORE_DIR)/src/zip.c $(CORE_DIR)/src/zip_read.c $(CORE_DIR)/src/zip_folder.c \
+	$(CORE_DIR)/src/seq.c
 SRCS += $(ZIP_SRCS) $(MINIZ_SRC)
 
 # Same defines as cmake/miniz.cmake: only the inflater, no allocation, stdio or time. Only

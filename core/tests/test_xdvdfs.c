@@ -139,6 +139,58 @@ static void test_minimal_tree(void)
     TEST_ASSERT_NULL(l.files);
 }
 
+static xc_err find(const char *name, xc_xdvdfs_entry *e, bool *found)
+{
+    xc_mem_source mem;
+    xc_source src;
+    xc_source_memory(&src, &mem, img, sizeof img);
+    xc_xdvdfs_volume vol;
+    xc_err err = xc_xdvdfs_open(&src, &vol);
+    return err != XC_OK ? err : xc_xdvdfs_find_root(&src, &vol, name, e, found);
+}
+
+/* §10: a name in the root only, any case, reading just the root's table. */
+static void test_find_root(void)
+{
+    img_reset(ROOT_SECTOR, SECTOR);
+    /* "default.xbe" takes 28 bytes: 14, its 11, padded to 4 */
+    put_entry(ROOT_SECTOR, 0, 28 / 4, 44 / 4, DATA_SECTOR, 10, 0x20, "default.xbe");
+    put_entry(ROOT_SECTOR, 28, 0, 0, SUB_SECTOR, SECTOR, 0x10, "a");
+    put_entry(ROOT_SECTOR, 44, 0, 0, DATA_SECTOR + 1, 0, 0x20, "zz");
+    put_entry(SUB_SECTOR, 0, 0, 0, DATA_SECTOR + 2, 3, 0x20, "deep");
+    xc_xdvdfs_entry e;
+    bool found = false;
+    TEST_ASSERT_EQUAL_INT(XC_OK, find("DEFAULT.XBE", &e, &found));
+    TEST_ASSERT_TRUE(found);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)DATA_SECTOR * SECTOR, e.offset);
+    TEST_ASSERT_EQUAL_UINT32(10, e.size);
+    TEST_ASSERT_NULL(e.path);
+    TEST_ASSERT_EQUAL_INT(XC_OK, find("a", &e, &found));
+    TEST_ASSERT_TRUE(found);
+    TEST_ASSERT_EQUAL_HEX8(0x10, e.attributes);
+    TEST_ASSERT_EQUAL_INT(XC_OK, find("zz", &e, &found));
+    TEST_ASSERT_TRUE(found);
+    TEST_ASSERT_EQUAL_INT(XC_OK, find("deep", &e, &found)); /* not in the root */
+    TEST_ASSERT_FALSE(found);
+    TEST_ASSERT_EQUAL_INT(XC_OK, find("default.xb", &e, &found));
+    TEST_ASSERT_FALSE(found);
+
+    /* An empty root; a loop in it; a child outside it. */
+    img_reset(ROOT_SECTOR, SECTOR);
+    TEST_ASSERT_EQUAL_INT(XC_OK, find("a", &e, &found));
+    TEST_ASSERT_FALSE(found);
+    put_entry(ROOT_SECTOR, 0, 0, 16 / 4, DATA_SECTOR, 1, 0x20, "a");
+    put_entry(ROOT_SECTOR, 16, 0, 16 / 4, DATA_SECTOR, 1, 0x20, "b");
+    TEST_ASSERT_EQUAL_INT(XC_ERR_CORRUPT, find("c", &e, &found));
+    TEST_ASSERT_FALSE(found);
+    img_reset(ROOT_SECTOR, SECTOR);
+    put_entry(ROOT_SECTOR, 0, 0, 0x300, DATA_SECTOR, 1, 0x20, "a");
+    TEST_ASSERT_EQUAL_INT(XC_ERR_CORRUPT, find("c", &e, &found));
+    img_reset(0, 0); /* no files at all */
+    TEST_ASSERT_EQUAL_INT(XC_OK, find("a", &e, &found));
+    TEST_ASSERT_FALSE(found);
+}
+
 static void test_empty_volume(void)
 {
     img_reset(0, 0);
@@ -642,6 +694,7 @@ int main(int argc, char **argv)
 {
     UNITY_BEGIN();
     RUN_TEST(test_minimal_tree);
+    RUN_TEST(test_find_root);
     RUN_TEST(test_empty_volume);
     RUN_TEST(test_empty_root_table);
     RUN_TEST(test_zero_size_file_sector_not_checked);

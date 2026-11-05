@@ -108,7 +108,8 @@ static const ui_draw fake = {NULL,
                              fake_image,
                              fake_image_size,
                              fake_save_backdrop,
-                             fake_backdrop};
+                             fake_backdrop,
+                             NULL};
 
 static void clear(void)
 {

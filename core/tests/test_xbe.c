@@ -106,10 +106,111 @@ static void test_invalid(void)
     }
 }
 
+/* ---- §4, §5: region, disc, version and the title image's section */
+
+static uint8_t big[0x3000]; /* the headers of make(), then the sections' bytes */
+
+static void section(size_t i, uint32_t raw, uint32_t raw_size, uint32_t name_off)
+{
+    size_t at = 0x400 + 56 * i;
+    memset(xbe + at, 0, 56);
+    put32(at + 0x0C, raw);
+    put32(at + 0x10, raw_size);
+    put32(at + 0x14, BASE + name_off);
+}
+
+static xc_err read_info(size_t len, xc_xbe_info *info)
+{
+    memcpy(big, xbe, sizeof xbe);
+    xc_source src;
+    xc_mem_source mem;
+    xc_source_memory(&src, &mem, big, len);
+    return xc_xbe_read_info(&src, info);
+}
+
+static void test_info(void)
+{
+    xc_xbe_info info;
+    make("Game");
+    put32(CERT_OFF + 0xA0, XC_XBE_REGION_NA | XC_XBE_REGION_JAPAN);
+    put32(CERT_OFF + 0xA8, 2);
+    put32(CERT_OFF + 0xAC, 0x7);
+    TEST_ASSERT_EQUAL_INT(XC_OK, read_info(sizeof big, &info));
+    TEST_ASSERT_EQUAL_STRING("Game", info.cert.title);
+    TEST_ASSERT_TRUE(info.has_region);
+    TEST_ASSERT_EQUAL_HEX32(3, info.region);
+    TEST_ASSERT_EQUAL_UINT32(2, info.disc);
+    TEST_ASSERT_EQUAL_UINT32(7, info.version);
+    TEST_ASSERT_EQUAL_UINT32(0, info.image_size); /* no sections */
+
+    /* A certificate too short for them: still an XBE, without them. */
+    put32(CERT_OFF, 0xAC);
+    TEST_ASSERT_EQUAL_INT(XC_OK, read_info(sizeof big, &info));
+    TEST_ASSERT_FALSE(info.has_region);
+    TEST_ASSERT_EQUAL_UINT32(0, info.disc);
+    put32(CERT_OFF, 0x1D0);
+    put32(0x108, CERT_OFF + 0xAF); /* the headers end inside the fields */
+    TEST_ASSERT_EQUAL_INT(XC_OK, read_info(sizeof big, &info));
+    TEST_ASSERT_FALSE(info.has_region);
+    put32(0x108, sizeof xbe);
+
+    /* $$XSIMAGE, then $$XTIMAGE: the title image wins, wherever it is. */
+    memcpy(xbe + 0x800, "$$XSIMAGE\0$$XTIMAGE\0.text\0$$XTIMAGEX", 37);
+    put32(0x11C, 3);
+    put32(0x120, BASE + 0x400);
+    section(0, 0x1000, 0x100, 0x800);
+    section(1, 0x2000, 0x800, 0x80A);
+    section(2, 0x1000, 0x1000, 0x814);
+    TEST_ASSERT_EQUAL_INT(XC_OK, read_info(sizeof big, &info));
+    TEST_ASSERT_EQUAL_UINT32(0x2000, info.image_offset);
+    TEST_ASSERT_EQUAL_UINT32(0x800, info.image_size);
+
+    /* The title image's bytes past the file's end: the save image instead. */
+    TEST_ASSERT_EQUAL_INT(XC_OK, read_info(0x27FF, &info));
+    TEST_ASSERT_EQUAL_UINT32(0x1000, info.image_offset);
+    TEST_ASSERT_EQUAL_UINT32(0x100, info.image_size);
+    /* Too large, or too small to be an XPR0: ignored too. */
+    section(1, 0x2000, XC_XBE_MAX_IMAGE + 1U, 0x80A);
+    TEST_ASSERT_EQUAL_INT(XC_OK, read_info(sizeof big, &info));
+    TEST_ASSERT_EQUAL_UINT32(0x1000, info.image_offset);
+    section(1, 0x2000, 0x1F, 0x80A);
+    TEST_ASSERT_EQUAL_INT(XC_OK, read_info(sizeof big, &info));
+    TEST_ASSERT_EQUAL_UINT32(0x1000, info.image_offset);
+
+    /* Names: "$$XTIMAGEX" isn't one; nor is a name before the base, or past the headers. */
+    section(0, 0x1000, 0x100, 0x81A);
+    section(1, 0x2000, 0x800, 0xFFA);
+    put32(0x400 + 56 * 2 + 0x14, BASE - 4U);
+    memcpy(xbe + 0xFFA, "$$XTIM", 6); /* runs into the end of the headers */
+    TEST_ASSERT_EQUAL_INT(XC_OK, read_info(sizeof big, &info));
+    TEST_ASSERT_EQUAL_UINT32(0, info.image_size);
+
+    /* The section headers outside the headers, before the base, or too many. */
+    section(1, 0x2000, 0x800, 0x80A);
+    TEST_ASSERT_EQUAL_INT(XC_OK, read_info(sizeof big, &info));
+    TEST_ASSERT_EQUAL_UINT32(0x800, info.image_size);
+    put32(0x120, BASE + 0x1000 - 56 * 3 + 1);
+    TEST_ASSERT_EQUAL_INT(XC_OK, read_info(sizeof big, &info));
+    TEST_ASSERT_EQUAL_UINT32(0, info.image_size);
+    put32(0x120, BASE - 56);
+    TEST_ASSERT_EQUAL_INT(XC_OK, read_info(sizeof big, &info));
+    TEST_ASSERT_EQUAL_UINT32(0, info.image_size);
+    put32(0x120, BASE + 0x400);
+    put32(0x11C, XC_XBE_MAX_SECTIONS + 1U);
+    TEST_ASSERT_EQUAL_INT(XC_OK, read_info(sizeof big, &info));
+    TEST_ASSERT_EQUAL_UINT32(0, info.image_size);
+
+    /* Not an XBE: as xc_xbe_read_cert, everything zero. */
+    xbe[0] = 'Y';
+    TEST_ASSERT_EQUAL_INT(XC_ERR_CORRUPT, read_info(sizeof big, &info));
+    TEST_ASSERT_EQUAL_UINT32(0, info.cert.title_id);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_valid);
     RUN_TEST(test_invalid);
+    RUN_TEST(test_info);
     return UNITY_END();
 }

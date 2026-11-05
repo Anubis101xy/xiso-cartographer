@@ -24,6 +24,9 @@ typedef struct loader {
     bool stopped;    /* the entry limit was reached */
     xc_url scratch;
     xc_url base;
+    xc_smb_url smb_scratch; /* url_problem's */
+    xc_smb_url smb_folder;  /* smb_line's */
+    xc_smb_url smb_file;
 } loader;
 
 /* --- bookkeeping ------------------------------------------------------------------------ */
@@ -174,8 +177,28 @@ static bool inside_zip(const char *path)
 /* §4.2: why a URL is invalid, without echoing it (it may hold user:pass, §4.2). */
 static const char *url_problem(loader *L, const char *url)
 {
+    if (xc_smb_is_url(url)) {
+        /* §4.2, smb.md §1: a file on a NAS's shared folder. */
+        const char *auth = url + 6;
+        if (memchr(auth, '@', strcspn(auth, "/")) != NULL) {
+            return "URL must not contain user credentials (log in in SETTINGS > NAS)";
+        }
+        xc_smb_url *su = &L->smb_scratch;
+        if (xc_smb_url_parse(url, strlen(url), su) != XC_OK) {
+            return "invalid smb:// URL (smb://<NAS>/<share>/<path to the image>)";
+        }
+        /* A '/' at the end names a game folder (smb.md §3.1), which may be a whole share. */
+        if (su->path[0] == '\0' && url[strlen(url) - 1U] != '/') {
+            return "smb:// URL names a share, not an image (use @smb for a folder)";
+        }
+        if (inside_zip(su->path)) {
+            return "URL points to a file inside a zip, which can't be resumed; use the URL of "
+                   "the .zip itself (ADR 0009)";
+        }
+        return NULL;
+    }
     if (!is_http_url(url)) {
-        return "URL must start with http:// or https://";
+        return "URL must start with http://, https:// or smb://";
     }
     const char *auth = strstr(url, "://") + 3;
     size_t auth_len = strcspn(auth, "/?");
@@ -547,6 +570,120 @@ static xc_err archiveorg_line(loader *L, size_t source, size_t line, const char 
     return err;
 }
 
+/* §5.4: generates entries from the images in a NAS folder (smb.md §3). */
+static xc_err smb_line(loader *L, size_t source, size_t line, const char *arg)
+{
+    xc_map *m = L->m;
+    xc_smb_url *folder = &L->smb_folder;
+    if (!xc_smb_is_url(arg) || xc_smb_url_parse(arg, strlen(arg), folder) != XC_OK) {
+        problem(L, XC_MAP_ERROR, source, line,
+                "invalid @smb folder (smb://<NAS>/<share>[/<folder>], no user name)");
+        return XC_OK;
+    }
+    char where[XC_SMB_MAX_URL + 64];
+    if (xc_smb_url_format(folder, where, sizeof where) != XC_OK) {
+        problem(L, XC_MAP_ERROR, source, line, "@smb folder address too long");
+        return XC_OK;
+    }
+    if (m->smb_folder_count < XC_MAP_MAX_LISTINGS) {
+        char *copy = dup_str(where);
+        if (copy == NULL) {
+            return XC_ERR_NOMEM;
+        }
+        m->smb_folders[m->smb_folder_count++] = copy;
+    }
+    if (L->ld == NULL || L->ld->list_smb == NULL) {
+        problem(L, XC_MAP_ERROR, source, line, "@smb isn't available here");
+        return XC_OK;
+    }
+    if (L->listings == XC_MAP_MAX_LISTINGS) {
+        problem(L, XC_MAP_ERROR, source, line, "@smb %s: more than %d listings", where,
+                XC_MAP_MAX_LISTINGS);
+        return XC_OK;
+    }
+    L->listings++;
+    xc_smb_listing listing;
+    memset(&listing, 0, sizeof listing);
+    xc_err err = L->ld->list_smb(L->ld->ctx, folder, &listing);
+    if (err != XC_OK) {
+        xc_smb_listing_free(&listing);
+        if (err == XC_ERR_NOMEM) {
+            return err;
+        }
+        problem(L, XC_MAP_ERROR, source, line, "@smb %s: %s", where, xc_err_str(err));
+        return XC_OK;
+    }
+    size_t images = 0;
+    size_t bad = 0;
+    xc_smb_url *file = &L->smb_file;
+    char url[XC_SMB_MAX_URL + 64];
+    for (size_t i = 0; i < listing.count && !L->stopped; i++) {
+        const xc_smb_listed *f = &listing.files[i];
+        xc_archiveorg_file gen;
+        memset(&gen, 0, sizeof gen);
+        char name[XC_SMB_MAX_NAME + 1];
+        bool zip = false;
+        if (f->game) {
+            /* A game folder (smb.md §3.1): named after itself, its address ends in '/'. */
+            const char *in = f->path[0] != '\0'        ? f->path
+                             : folder->path[0] != '\0' ? folder->path
+                                                       : folder->share;
+            const char *last = strrchr(in, '/');
+            last = last != NULL ? last + 1 : in;
+            size_t n = strlen(last);
+            if (n == 0 || n >= sizeof name) {
+                bad++;
+                continue;
+            }
+            memcpy(name, last, n + 1U);
+        } else if (!xc_smb_image_name(f->path, name, sizeof name, &zip)) {
+            continue; /* not an image: skipped without a word (smb.md §3) */
+        }
+        if (f->path[0] == '\0') {
+            *file = *folder;
+        } else if (xc_smb_url_child(folder, f->path, file) != XC_OK) {
+            bad++;
+            continue;
+        }
+        if (xc_smb_url_format(file, url, sizeof url - 1U) != XC_OK) {
+            bad++;
+            continue;
+        }
+        size_t used = strlen(url);
+        if (f->game && url[used - 1U] != '/') {
+            url[used++] = '/';
+            url[used] = '\0';
+        }
+        if (url_problem(L, url) != NULL) {
+            bad++;
+            continue;
+        }
+        gen.name = name;
+        gen.size = f->size;
+        gen.zip = zip;
+        err = add_entry(L, source, line, 0, "", url, &gen);
+        if (err != XC_OK) {
+            xc_smb_listing_free(&listing);
+            return err;
+        }
+        images++;
+    }
+    if (images == 0 && bad == 0) {
+        problem(L, XC_MAP_WARNING, source, line,
+                "@smb %s has no .iso, .xiso or .zip files and no game folders", where);
+    }
+    if (bad > 0) {
+        problem(L, XC_MAP_WARNING, source, line,
+                "@smb %s: skipped %zu game(s) whose name or path isn't accepted", where, bad);
+    }
+    if (listing.truncated) {
+        problem(L, XC_MAP_WARNING, source, line, "@smb %s: more than %d files; the rest skipped",
+                where, XC_SMB_MAX_LISTED);
+    }
+    xc_smb_listing_free(&listing);
+    return XC_OK;
+}
+
 static xc_err directive_line(loader *L, size_t source, size_t line, char *text)
 {
     char *name = text + 1;
@@ -560,13 +697,15 @@ static xc_err directive_line(loader *L, size_t source, size_t line, char *text)
     }
     char *arg = xc_text_trim(name + n);
     name[n] = '\0';
-    if (strcmp(name, "include") == 0 || strcmp(name, "archiveorg") == 0) {
+    if (strcmp(name, "include") == 0 || strcmp(name, "archiveorg") == 0 ||
+        strcmp(name, "smb") == 0) {
         if (arg[0] == '\0') {
             problem(L, XC_MAP_ERROR, source, line, "@%s needs an argument", name);
             return XC_OK;
         }
-        return name[0] == 'i' ? include_line(L, source, line, arg)
-                              : archiveorg_line(L, source, line, arg);
+        return name[0] == 'i'   ? include_line(L, source, line, arg)
+               : name[0] == 's' ? smb_line(L, source, line, arg)
+                                : archiveorg_line(L, source, line, arg);
     }
     problem(L, XC_MAP_WARNING, source, line, "unknown directive @%s skipped", name);
     return XC_OK;
@@ -668,11 +807,13 @@ xc_err xc_map_load(const char *data, size_t len, const char *location, const xc_
     memset(map, 0, sizeof *map);
     map->problems = malloc(sizeof *map->problems * XC_MAP_MAX_PROBLEMS);
     map->sources = (char **)calloc(XC_MAP_MAX_FILES, sizeof *map->sources);
+    map->smb_folders = (char **)calloc(XC_MAP_MAX_LISTINGS, sizeof *map->smb_folders);
     loader *L = calloc(1, sizeof *L);
     /* One extra byte so the last line can be terminated in place. */
     char *text = malloc((len > XC_MAP_MAX_FILE ? 0 : len) + 1);
     xc_err err = XC_OK;
-    if (map->problems == NULL || map->sources == NULL || L == NULL || text == NULL) {
+    if (map->problems == NULL || map->sources == NULL || map->smb_folders == NULL || L == NULL ||
+        text == NULL) {
         err = XC_ERR_NOMEM;
     }
     size_t root = 0;
@@ -720,6 +861,12 @@ void xc_map_free(xc_map *map)
         }
     }
     free((void *)map->sources);
+    if (map->smb_folders != NULL) {
+        for (size_t i = 0; i < map->smb_folder_count; i++) {
+            free(map->smb_folders[i]);
+        }
+    }
+    free((void *)map->smb_folders);
     memset(map, 0, sizeof *map);
 }
 
@@ -769,14 +916,17 @@ const xc_map_entry *xc_map_find_name(const xc_map *map, const char *name)
     return NULL;
 }
 
+typedef enum host_use { HOST_ENTRY, HOST_MAP, HOST_FOLDER } host_use;
+
 /* Counts u's server in out[0, *n), adding it if it's new and there's room. */
-static void count_host(const xc_url *u, bool entry, xc_map_host *out, size_t max, size_t *n)
+static void count_host(const xc_url *u, host_use use, xc_map_host *out, size_t max, size_t *n)
 {
     for (size_t i = 0; i < *n && i < max; i++) {
         xc_map_host *h = &out[i];
         if (h->scheme == u->scheme && h->port == u->port && strcmp(h->host, u->host) == 0) {
-            h->entries += entry ? 1U : 0U;
-            h->maps += entry ? 0U : 1U;
+            h->entries += use == HOST_ENTRY ? 1U : 0U;
+            h->maps += use == HOST_MAP ? 1U : 0U;
+            h->folders += use == HOST_FOLDER ? 1U : 0U;
             return;
         }
     }
@@ -787,10 +937,26 @@ static void count_host(const xc_url *u, bool entry, xc_map_host *out, size_t max
         h->port = u->port;
         h->is_ipv4 = u->is_ipv4;
         memcpy(h->host, u->host, sizeof h->host);
-        h->entries = entry ? 1U : 0U;
-        h->maps = entry ? 0U : 1U;
+        h->entries = use == HOST_ENTRY ? 1U : 0U;
+        h->maps = use == HOST_MAP ? 1U : 0U;
+        h->folders = use == HOST_FOLDER ? 1U : 0U;
         (*n)++;
     }
+}
+
+/* An smb:// URL's server as an xc_url of scheme XC_URL_SMB, for count_host. */
+static bool smb_host(const char *text, xc_url *u)
+{
+    xc_smb_url su;
+    if (!xc_smb_is_url(text) || xc_smb_url_parse(text, strlen(text), &su) != XC_OK) {
+        return false;
+    }
+    memset(u, 0, sizeof *u);
+    u->scheme = XC_URL_SMB;
+    u->port = su.port;
+    u->is_ipv4 = su.is_ipv4;
+    memcpy(u->host, su.host, sizeof su.host);
+    return true;
 }
 
 size_t xc_map_hosts(const xc_map *map, xc_map_host *out, size_t max)
@@ -802,14 +968,19 @@ size_t xc_map_hosts(const xc_map *map, xc_map_host *out, size_t max)
     size_t n = 0;
     for (size_t i = 0; i < map->entry_count; i++) {
         const char *url = map->entries[i].url;
-        if (url != NULL && xc_url_parse(url, strlen(url), &u) == XC_OK) {
-            count_host(&u, true, out, max, &n);
+        if (url != NULL && (xc_url_parse(url, strlen(url), &u) == XC_OK || smb_host(url, &u))) {
+            count_host(&u, HOST_ENTRY, out, max, &n);
         }
     }
     for (size_t i = 1; i < map->source_count; i++) {
         const char *loc = map->sources[i];
         if (loc != NULL && is_http_url(loc) && xc_url_parse(loc, strlen(loc), &u) == XC_OK) {
-            count_host(&u, false, out, max, &n);
+            count_host(&u, HOST_MAP, out, max, &n);
+        }
+    }
+    for (size_t i = 0; i < map->smb_folder_count; i++) {
+        if (smb_host(map->smb_folders[i], &u)) {
+            count_host(&u, HOST_FOLDER, out, max, &n);
         }
     }
     return n;

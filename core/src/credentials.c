@@ -12,6 +12,7 @@
 
 #include "text.h"
 #include "xcat/login.h"
+#include "xcat/smb.h"
 
 /* --- small helpers ------------------------------------------------------------------ */
 
@@ -95,11 +96,35 @@ static xc_err close_section(parser *p)
         p->line = s->line;
         return fail(p, "[%s] has no hosts", s->name);
     }
-    if (s->cookie == NULL && s->header_count == 0) {
+    if ((s->smb_user == NULL) != (s->smb_nthash == NULL)) {
         p->line = s->line;
-        return fail(p, "[%s] has neither cookie nor header", s->name);
+        return fail(p, "[%s]: smb_user and smb_nthash go together", s->name);
+    }
+    if (s->smb_domain != NULL && s->smb_user == NULL) {
+        p->line = s->line;
+        return fail(p, "[%s]: smb_domain without smb_user", s->name);
+    }
+    if (s->cookie == NULL && s->header_count == 0 && s->smb_user == NULL) {
+        p->line = s->line;
+        return fail(p, "[%s] has neither cookie, header nor smb_user", s->name);
     }
     return XC_OK;
+}
+
+/* §4.1: an SMB user or domain name: printable, no separators a login would split at. */
+static bool smb_login_name(const char *v, size_t max)
+{
+    size_t n = strlen(v);
+    if (n == 0 || n > max) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (strchr("\\/:@\"", v[i]) != NULL) {
+            return false;
+        }
+    }
+    size_t bad = 0;
+    return xc_text_utf8((const unsigned char *)v, n, &bad);
 }
 
 static xc_err open_section(parser *p, char *line)
@@ -284,6 +309,28 @@ static xc_err key_value(parser *p, char *line)
     if (strcmp(key, "header") == 0) {
         return key_header(p, value);
     }
+    if (strcmp(key, "smb_user") == 0 || strcmp(key, "smb_domain") == 0) {
+        bool user = key[4] == 'u';
+        const char **slot = user ? &s->smb_user : &s->smb_domain;
+        if (*slot != NULL) {
+            return fail(p, "[%s]: %s given twice", s->name, key);
+        }
+        if (!smb_login_name(value, user ? XC_SMB_MAX_USER : XC_SMB_MAX_DOMAIN)) {
+            return fail(p, "[%s]: invalid %s", s->name, key);
+        }
+        *slot = value;
+        return XC_OK;
+    }
+    if (strcmp(key, "smb_nthash") == 0) {
+        if (s->smb_nthash != NULL) {
+            return fail(p, "[%s]: smb_nthash given twice", s->name);
+        }
+        if (!xc_smb_valid_nthash(value)) {
+            return fail(p, "[%s]: smb_nthash must be 32 hex digits", s->name);
+        }
+        s->smb_nthash = value;
+        return XC_OK;
+    }
     if (strcmp(key, "allow_http") == 0) {
         if (p->has_allow_http) {
             return fail(p, "[%s]: allow_http given twice", s->name);
@@ -315,7 +362,13 @@ static bool patterns_overlap(const xc_cred_pattern *a, const xc_cred_pattern *b)
     return is_subdomain(e->host, w->host);
 }
 
-/* §5: no host may be matched by two sections. */
+static bool is_http_section(const xc_cred_section *s)
+{
+    return s->cookie != NULL || s->header_count > 0;
+}
+
+/* §5: no host may be matched by two sections that log in to the same kind of server: two with
+   HTTP credentials, or two with an SMB login. */
 static xc_err check_overlaps(parser *p)
 {
     xc_credentials *c = p->c;
@@ -323,6 +376,11 @@ static xc_err check_overlaps(parser *p)
         const xc_cred_section *sj = &c->sections[j];
         for (size_t i = 0; i < j; i++) {
             const xc_cred_section *si = &c->sections[i];
+            bool both_http = is_http_section(si) && is_http_section(sj);
+            bool both_smb = si->smb_user != NULL && sj->smb_user != NULL;
+            if (!both_http && !both_smb) {
+                continue;
+            }
             for (size_t a = 0; a < si->pattern_count; a++) {
                 for (size_t b = 0; b < sj->pattern_count; b++) {
                     if (patterns_overlap(&si->patterns[a], &sj->patterns[b])) {
@@ -469,9 +527,12 @@ const xc_cred_section *xc_cred_for_url(const xc_credentials *c, const xc_url *ur
     }
     for (size_t i = 0; i < c->section_count; i++) {
         const xc_cred_section *s = &c->sections[i];
+        if (!is_http_section(s)) {
+            continue; /* an SMB login only (§6.1) */
+        }
         for (size_t k = 0; k < s->pattern_count; k++) {
             if (pattern_matches(&s->patterns[k], url)) {
-                /* Patterns don't overlap, so no other section can match this host. */
+                /* HTTP sections don't overlap, so no other one can match this host. */
                 if (url->scheme == XC_URL_HTTPS) {
                     return s;
                 }
@@ -480,6 +541,71 @@ const xc_cred_section *xc_cred_for_url(const xc_credentials *c, const xc_url *ur
         }
     }
     return NULL;
+}
+
+const xc_cred_section *xc_cred_for_smb(const xc_credentials *c, const char *host, uint16_t port)
+{
+    if (c == NULL || host == NULL) {
+        return NULL;
+    }
+    xc_url url;
+    memset(&url, 0, sizeof url);
+    size_t n = strlen(host);
+    if (n == 0 || n > XC_URL_MAX_HOST) {
+        return NULL;
+    }
+    memcpy(url.host, host, n + 1);
+    url.port = port;
+    uint8_t ip[4];
+    url.is_ipv4 = xc_url_ipv4(&url, ip);
+    for (size_t i = 0; i < c->section_count; i++) {
+        const xc_cred_section *s = &c->sections[i];
+        if (s->smb_user == NULL) {
+            continue;
+        }
+        for (size_t k = 0; k < s->pattern_count; k++) {
+            if (pattern_matches(&s->patterns[k], &url)) {
+                return s; /* SMB sections don't overlap (§5) */
+            }
+        }
+    }
+    return NULL;
+}
+
+xc_err xc_cred_smb_section(const char *name, const char *host, const char *user, const char *domain,
+                           const char *nthash, char *out, size_t cap)
+{
+    if (name == NULL || host == NULL || user == NULL || nthash == NULL || out == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    size_t nl = strlen(name);
+    if (nl == 0 || nl > XC_CRED_MAX_NAME) {
+        return XC_ERR_INVALID_ARG;
+    }
+    for (size_t i = 0; i < nl; i++) {
+        char ch = name[i];
+        if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
+              ch == '_' || ch == '-')) {
+            return XC_ERR_INVALID_ARG;
+        }
+    }
+    bool with_domain = domain != NULL && domain[0] != '\0';
+    if (!smb_login_name(user, XC_SMB_MAX_USER) || has_control(user) ||
+        (with_domain && (!smb_login_name(domain, XC_SMB_MAX_DOMAIN) || has_control(domain))) ||
+        !xc_smb_valid_nthash(nthash) || host[0] == '\0' || has_control(host) ||
+        strpbrk(host, " ,[]=") != NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    int n = with_domain ? snprintf(out, cap,
+                                   "[%s]\nhosts = %s\nsmb_user = %s\nsmb_domain = %s\n"
+                                   "smb_nthash = %s\n",
+                                   name, host, user, domain, nthash)
+                        : snprintf(out, cap, "[%s]\nhosts = %s\nsmb_user = %s\nsmb_nthash = %s\n",
+                                   name, host, user, nthash);
+    if (n < 0 || (size_t)n >= cap) {
+        return XC_ERR_LIMIT;
+    }
+    return XC_OK;
 }
 
 /* Appends bytes (header lines are not NUL-terminated: the client sends exactly *n bytes). */

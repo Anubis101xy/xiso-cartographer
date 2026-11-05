@@ -44,7 +44,7 @@ press left
 press down
 expect installed
 
-note Settings: install location, Authentication, Map sources
+note Settings: install location, Authentication, Map sources, NAS
 press down
 expect settings
 press right
@@ -64,6 +64,11 @@ press a
 expect ask-kind
 press b
 expect sources
+press b
+expect settings
+press down
+press a
+expect nas
 press b
 expect settings
 

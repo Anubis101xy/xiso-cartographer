@@ -37,6 +37,12 @@ LICENSES = [
      "third_party/nxdk/lib/usb/libusbohci/LICENSE.txt"),
     ("libusbohci-DISCLAIMER.txt", "libusbohci's disclaimer",
      "third_party/nxdk/lib/usb/libusbohci/DISCLAIMER.md"),
+    ("libsmb2.txt", "libsmb2 (NAS shared folders, SMB2/3): LGPL-2.1, Ronnie Sahlberg; its source: "
+     "licenses\\libsmb2-source.txt", "third_party/libsmb2/LICENCE-LGPL-2.1.txt"),
+    ("LZMA-SDK.txt", "LZMA SDK, 7z decoder (7z archives): public domain, Igor Pavlov",
+     "third_party/lzma/7zC.txt"),
+    ("stb_image.txt", "stb_image (JPEG and PNG covers): public domain or MIT, Sean Barrett",
+     "third_party/stb/LICENSE"),
 ]
 
 # The fonts' OFL texts ship in fonts\ next to them, as the build copies them.
@@ -55,6 +61,21 @@ Its source form is available from the curl project, https://curl.se/docs/caextra
 the xiso-cartographer repository at third_party/cacert/cacert.pem for this release's tag.
 """
 
+SMB_NOTICE = """libsmb2 (NAS shared folders over SMB2/3)
+
+default.xbe contains libsmb2 by Ronnie Sahlberg, statically linked, under the GNU Lesser General
+Public License 2.1 (licenses\\libsmb2.txt), with a small port to the console's network stack.
+
+Its source, with the port, is in the xiso-cartographer repository at third_party/libsmb2/ for
+this release's tag (third_party/libsmb2/xcat/README.md says what the port changes, and
+nxdk.patch is the port as a diff against upstream commit 727feaa). Upstream:
+https://github.com/sahlberg/libsmb2
+
+You may change libsmb2 and build default.xbe again with your version: docs/build-xbox.md in the
+repository says how. The rest of xiso-cartographer is under the MIT licence (LICENSE.txt), so its
+source is there to relink with too.
+"""
+
 README = """xiso-cartographer {version}
 
 An installer for the original Xbox: it lists the games your map file names, and installs the
@@ -67,6 +88,7 @@ Install
 What it needs
   A map, E:\\xcat\\map.txt, that lists what to install (it can be added on the console, in
   SETTINGS > Map sources), and for archive.org items a login (SETTINGS > Authentication).
+  Games on a NAS or a PC's shared folder: SETTINGS > NAS finds it, logs in and adds the folder.
   The game catalog, catalog.bin, comes with each release as a separate download: put it in
   E:\\Apps\\xcat\\ so games show their names and details.
 
@@ -131,6 +153,7 @@ def files(bin_dir, root, ver):
         with open(p, "rb") as f:
             out["licenses/" + dest] = crlf(f.read().decode("utf-8", errors="replace"))
     out["licenses/Mozilla-CA.txt"] = crlf(CA_NOTICE)
+    out["licenses/libsmb2-source.txt"] = crlf(SMB_NOTICE)
     return {NAME + "/" + k: v for k, v in out.items()}
 
 

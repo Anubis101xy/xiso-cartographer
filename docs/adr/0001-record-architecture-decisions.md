@@ -42,3 +42,4 @@ We record every hard-to-reverse decision as an Architecture Decision Record (ADR
 | 0015 | The UI: SDL2 and SDL_ttf, with our own controller-first widgets | Accepted; M8 |
 | 0016 | A settings file, and the install location in it | Accepted; M8 |
 | 0017 | Releases: a tagged zip with every licence, built by CI as a draft | Proposed; M9 |
+| 0018 | NAS shared folders over SMB: libsmb2, NT-hash logins, `@smb` folders, game folders, a scan, PLAY, 7z and archive folders, deleting installs, apps | Accepted; owner of this fork |

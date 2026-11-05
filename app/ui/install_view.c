@@ -216,14 +216,14 @@ void ui_install_draw(const ui_draw *d, ui_install_view *v, int pan)
 
 void ui_format_size(char *out, size_t size, uint64_t bytes)
 {
-    static const char *const units[] = {"KB", "MB", "GB"};
+    static const char *const units[] = {"KB", "MB", "GB", "TB"};
     if (bytes < 1000U) {
         (void)snprintf(out, size, "%u bytes", (unsigned)bytes);
         return;
     }
     uint64_t unit = 1000U;
     int u = 0;
-    while (u < 2 && bytes / unit >= 1000U) {
+    while (u < 3 && bytes / unit >= 1000U) {
         unit *= 1000U;
         u++;
     }

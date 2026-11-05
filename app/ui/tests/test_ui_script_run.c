@@ -111,8 +111,8 @@ static void test_check_names(void)
 }
 
 static ui_lib_item items[] = {
-    {"Alpha", "", "", UI_LIB_NOT_TRIED, NULL},
-    {"Beta", "", "", UI_LIB_NOT_TRIED, NULL},
+    {"Alpha", "", "", UI_LIB_NOT_TRIED, NULL, false},
+    {"Beta", "", "", UI_LIB_NOT_TRIED, NULL, false},
 };
 
 /* The library's names, as the buttons reach them; each one the script knows. */

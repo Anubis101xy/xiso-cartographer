@@ -84,7 +84,8 @@ const char *ui_install_screen(const ui_install_view *v);
    still (ui_backdrop). */
 void ui_install_draw(const ui_draw *d, ui_install_view *v, int pan);
 
-/* Sizes for people, decimal like the console's dashboard: "740 KB", "12.3 MB", "4.38 GB". */
+/* Sizes for people, decimal like the console's dashboard: "740 KB", "12.3 MB", "4.38 GB",
+   "1.82 TB". */
 void ui_format_size(char *out, size_t size, uint64_t bytes);
 
 /* The time left at `speed` tenths of MB/s for `left` bytes: "about 12 minutes left", "about 2

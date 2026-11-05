@@ -76,9 +76,10 @@ What the app shows, by name. An open keyboard comes first, then an open dialog, 
 | Name | Shown |
 |---|---|
 | `games`, `installed`, `settings` | The library's section, its list or its sections highlighted |
-| `folders`, `logins`, `sources` | SETTINGS' pages: Install location, Authentication, Map sources |
-| `keyboard-search`, `keyboard-email`, `keyboard-password`, `keyboard-folder`, `keyboard-source`, `keyboard-title-id` | The keyboard, open for that field |
-| `ask-install`, `ask-exit`, `ask-logout`, `ask-forget`, `ask-remove`, `ask-kind` | The dialog asking before installing, leaving, logging out, removing a login, removing a source, or what kind of source to add |
+| `folders`, `logins`, `sources`, `nas` | SETTINGS' pages: Install location, Authentication, Map sources, NAS |
+| `nas-browse` | SETTINGS > NAS, browsing a NAS's shares and folders |
+| `keyboard-search`, `keyboard-email`, `keyboard-password`, `keyboard-folder`, `keyboard-source`, `keyboard-title-id`, `keyboard-nas-address`, `keyboard-nas-user`, `keyboard-nas-password` | The keyboard, open for that field |
+| `ask-install`, `ask-exit`, `ask-logout`, `ask-forget`, `ask-remove`, `ask-kind`, `ask-play`, `ask-nas-use`, `ask-delete` | The dialog asking before installing (or, for one that isn't finished, CARRY ON or DELETE), leaving, logging out, removing a login, removing a source, what kind of source to add, playing an installed game, adding a NAS folder, or deleting an install |
 | `message` | A message with OK (UI SCRIPT, SETTINGS, NOT ADDED, …) |
 | `installing`, `ask-stop` | The install screen, and its "stop?" dialog |
 | `install-ok`, `install-failed` | The install's end: INSTALLED, or NOT INSTALLED (whatever its buttons) |
@@ -90,3 +91,5 @@ While a script runs, the app logs each screen as it reaches it (`Screen: <name>`
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-10-28 | First version. |
+| 1.0 | 2026-10-29 | §6: the NAS page's screens and `ask-play` (ADR 0018). The format is unchanged. |
+| 1.0 | 2026-11-01 | §6: `ask-delete`. The format is unchanged. |

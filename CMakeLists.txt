@@ -29,6 +29,7 @@ xcat_enable_fuzzing()
 
 add_subdirectory(core)
 add_subdirectory(platform/host)
+add_subdirectory(platform/smb)
 add_subdirectory(tools/xcat-cli)
 
 if(XCAT_BUILD_TESTS)

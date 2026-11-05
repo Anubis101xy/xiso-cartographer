@@ -6,8 +6,86 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-05
+
+### Added
+
+- **Game art and details** ([ADR 0019](docs/adr/0019-game-art.md), [art.md](docs/formats/art.md)). When the highlight rests on a game in GAMES or INSTALLED, its details show a picture and what the game's own files say, read from the NAS or the console's drive:
+  - the picture: a cover beside the game (`<name>.jpg`, `.png` or `.tbn` next to an image; for a game folder, or an image in a folder of its own, XBMC4Gamers' `_resources/artwork/poster.jpg`, `default.tbn`, `cover.jpg`/`.png`, `folder.jpg`/`.png`), else the title image inside its `default.xbe` (an XPR0 texture, [xpr.md](docs/formats/xpr.md));
+  - the heading: the game's real title, from an XBMC4Gamers synopsis (`_resources/default.xml`, [synopsis.md](docs/formats/synopsis.md)) or the XBE's certificate;
+  - its region (NTSC-U, NTSC-J, PAL, region free), title ID and disc number from the XBE ([xbe.md](docs/formats/xbe.md) §4–§5), and from a synopsis who made it, genre, year, players, ESRB, rating and the overview. White and Black scroll text that doesn't fit.
+  - A disc image's `default.xbe` is read from its root without listing the image ([xdvdfs.md §10](docs/formats/xdvdfs.md#10-a-name-in-the-root)). Archives' XBEs aren't read (they're compressed); what's beside them is.
+  - JPEG (baseline and progressive) and PNG are decoded by stb_image v2.30 (`third_party/stb`, public domain or MIT), JPEG and PNG only, within a 4 MiB file, 2048-pixel side and 32 MiB memory limit. Read once the highlight has rested 350 ms, the last 12 games' art kept.
+- **A panel at the top** of the library, right of the title: the console's address, the NAS of the highlighted game (or the map's first) with "off" if its folders didn't list, and the free space on the install drive (and E:) with a bar. The title tab is narrower to make room.
+- **Long names slide:** a highlighted line too long for the list scrolls sideways to its end after a moment, then back, in every list.
+- New fuzzers: `fuzz_picture`, `fuzz_xpr`, `fuzz_synopsis`; `fuzz_xbe` covers the region and sections.
+
 ### Changed
 
+- GAMES and INSTALLED are in alphabetical order: case folded, numbers by value ("Halo 2" before "Halo 10").
+- A game's facts are separated by " · " rather than "  |  ", so year, region and size fit the details.
+- The search panel sits where the top panel is.
+
+## [0.11.1] - 2026-11-02
+
+### Added
+
+- INSTALLED's summary panel shows **HARD DRIVE**: the free space on the install folder's drive, a bar of how much of it is used, and its size (`E: 412 GB free`, `of 931 GB`); with games on F: or G:, E: (where apps go) is shown under it, without the sizes. It's read again after every install, delete and change of install folder, and so is the free space SETTINGS shows for each drive. The other sections keep the game counts.
+
+### Changed
+
+- Sizes of a terabyte and more read `1.82 TB`, not `1820 GB`.
+
+## [0.11.0] - 2026-11-01
+
+Archives, apps, and deleting installs.
+
+### Added
+
+- **7z archives** (docs/formats/sevenz.md, ADR 0018 decision 9): a `.7z` that holds one `.iso`/`.xiso` streams it into the install, and one that holds a game or app folder installs the folder. LZMA, LZMA2 (with BCJ) and uncompressed 7z are read; BCJ2, PPMd and passwords are refused by name before anything is written. The dictionary must fit in the console's free memory (7-Zip's Normal and usually Maximum levels do; Ultra doesn't), and the message says so with both sizes. `@smb` folders list `.7z` files, and so does `E:\xcat\isos\`. The LZMA SDK's 7z decoder (public domain) is vendored in `third_party/lzma`.
+- **Zips of game and app folders** (folder-image.md §7, zip.md §5): a zip with no image installs the folder of its shallowest `default.xbe` (an app's `My App/` inside the zip, or the zip's top), leaving out what's beside it and macOS clutter, each member inflated as it's read and checked against its CRC-32.
+- **Apps**: the install question offers INSTALL or AS AN APP (to `E:\Apps`); items from a folder named Apps, Applications, Homebrew, Emulators or Dashboards go to `E:\Apps` by default (AS A GAME for the install folder). INSTALLED lists what this app installed in both, and PLAY starts either.
+- **Deleting installs** (ADR 0018 decision 10): A on an unfinished install in INSTALLED, DELETE in an installed game's PLAY question there, or DELETE in GAMES' NOT FINISHED question (CARRY ON / DELETE / CANCEL) deletes the folder after asking again (KEEP is the default). Only folders this app made are ever deleted; saved games in `E:\UDATA` stay.
+- `xcat-cli install` takes `.7z` and folder archives, and `--max-dict <MiB>` to bound a 7z's dictionary as on a console.
+- New core modules `folder_image`'s `order`, `arc_folder`, `zip_folder` and `sevenz`, tested against archives 7-Zip and Python made (`core/tests/data/`, `tools/fixtures/sevenz/`) and fuzzed (`fuzz_sevenz`); error codes `XC_ERR_NOT_7Z`, `XC_ERR_7Z_UNSUPPORTED`, `XC_ERR_7Z_MEMORY`.
+
+### Changed
+
+- `XC_ERR_ZIP_MEMBER` and `XC_ERR_ZIP_CRC` speak of archives: "The archive holds no game: one .iso or .xiso image, or a folder with a default.xbe".
+
+## [0.10.1] - 2026-11-01
+
+After the first run on a console.
+
+### Fixed
+
+- SETTINGS > NAS: opening a share or folder opened the one at that place in the NAS's own order, not the one highlighted (the list is sorted for display), so the folder shown and added could differ from the one picked.
+- The NAS login is saved as soon as the NAS accepts it, not only when a folder is added; a NAS with a saved login opens with A, no typing (X: another login). A saved login the NAS refuses says so.
+
+### Changed
+
+- SETTINGS > NAS shows the console's address (`This Xbox: 192.168.1.23`, or that it isn't on the network), and lists the NASes with a saved login, and those the map uses, before "Find a NAS on the network" and "Type a NAS address".
+- Browsing a NAS: "Add this folder to GAMES" (or "Add this game to GAMES" in a game folder) instead of "Use this folder"; X adds the highlighted folder, or a whole shared folder, without opening it; the question names exactly the folder added; the panel describes the highlighted line, and counts images and folders; adding a folder goes to GAMES.
+- A NAS game's details name the folder it's in on the NAS ("From the NAS 192.168.1.50: Games > Xbox").
+
+## [0.10.0] - 2026-10-30
+
+Games from a NAS: install from a shared folder over SMB, found and logged in to on the console, and start installed games from the app (ADR 0018).
+
+### Added
+
+- NAS shared folders over SMB2/3 (ADR 0018, docs/formats/smb.md, docs/nas-setup.md): `smb://host[:port]/share/path` map entries and `@smb <folder>` lines (map.md §4.2, §5.4), which list a folder's `.iso`, `.xiso` and `.zip` images and those one folder down. They install like any image: streamed, resumable, checked, with one reconnect after a dropped connection. libsmb2 (LGPL-2.1) is vendored in `third_party/libsmb2` with a small nxdk port (`xcat/nxdk.patch`, explained in its README) and built into the XBE (`app/smb.mk`) and, on Linux and macOS, `xcat-cli`.
+- Extracted game folders on a NAS (smb.md §3.1–§3.2, docs/formats/folder-image.md): a folder with a `default.xbe` is listed as one game, and installed by turning its listing into a trimmed xiso held in memory, so it gets the image installer's FATX checks, journal, resume and read-back unchanged. NAS clutter (`.DS_Store`, `._*`, `@eaDir`, recycle bins) is left out; anything else the console can't store is refused with its name in the log (`XC_ERR_GAME_FOLDER`).
+- SETTINGS > NAS: scan the console's network for file sharing servers (TCP 445 on its /24, then NetBIOS names; smb.md §5) or type an address, log in on the on-screen keyboard (or as a guest), browse shares and folders, and **Use this folder** writes the login and the `@smb` line and lists the games.
+- SMB logins in the credentials file: `smb_user`, `smb_domain`, `smb_nthash` (credentials.md §4.1). Only the NT hash of the password is kept; the password typed on the console is wiped once it's hashed. HTTP and SMB sections may name the same host (§5).
+- PLAY: A on an installed game starts its `default.xbe` (in GAMES: PLAY, INSTALL AGAIN or CANCEL).
+- `xcat-cli smb-scan`, `smb-shares`, `smb-ls [--tree]` and `smb-hash`; `xcat-cli map` lists `@smb` folders and `install` takes `smb://` images and game folders (a URL ending in `/`).
+- New core modules `smb` (addresses, image names, NT hash with its own MD4, listings), `netbios` (node status) and `folder_image`, each tested and fuzzed; the error codes `XC_ERR_SMB_URL`, `_LOGIN`, `_SHARE`, `_DENIED`, `_NOT_FOUND`, `XC_ERR_SMB` and `XC_ERR_GAME_FOLDER`.
+- The release zip carries libsmb2's licence and where its source is (`licenses\libsmb2.txt`, `licenses\libsmb2-source.txt`).
+
+### Changed
+
+- lwIP on the console: 32 sockets (`MEMP_NUM_NETCONN`) and a 64-entry ARP table, for the NAS scan's 16 connections at a time. Rebuild the Docker image after pulling.
 - README: the status is now beta (0.9.0), "What it will do" is "What it does", and a new "Installing" section explains how to put a release on the console.
 
 ## [0.9.0] - 2026-10-28

@@ -107,6 +107,11 @@ typedef struct xc_install_req {
     /* The source is a zip archive holding the image (docs/formats/zip.md): a stored member
        installs like a bare image, a Deflate one from a stream (stream-install.md). */
     bool zip;
+    /* The source is a 7z archive (docs/formats/sevenz.md): its one image, streamed like a
+       Deflate member, or its game or app folder. max_dict bounds the LZMA dictionary a 7z
+       may need (0: no bound; the console passes what its memory allows). */
+    bool sevenz;
+    size_t max_dict;
     uint64_t spool_reserve; /* Deflate zips: 0 = XC_INSTALL_SPOOL_RESERVE */
     const char *etag;       /* the server's validators, NULL if none (journal.md §4) */
     const char *last_modified;
@@ -163,7 +168,9 @@ typedef struct xc_install_result {
     char title_name[3 * XC_XBE_TITLE_UNITS + 1];
     const char *title_note; /* a static string */
     /* zips (req->zip) */
-    char zip_member[256];  /* the image's name in the zip */
+    char zip_member[256];  /* the image's name in the zip; for a folder, its path and '/' */
+    bool archive_folder;   /* the archive held a game or app folder (folder-image.md §7) */
+    char folder_why[160];  /* XC_ERR_GAME_FOLDER, XC_ERR_ZIP_UNSUPPORTED: which and why */
     uint16_t zip_method;   /* 0 stored, 8 Deflate; on XC_ERR_ZIP_UNSUPPORTED, the method seen */
     unsigned passes;       /* Deflate: passes over the member (stream-install.md §3) */
     uint64_t reread_bytes; /* Deflate: image bytes read again in passes 2 and later */

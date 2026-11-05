@@ -110,6 +110,9 @@ xcat_add_test(test_map_edit)
 xcat_add_test(test_json)
 xcat_add_test(test_archiveorg)
 xcat_add_test(test_xbe)
+xcat_add_test(test_picture ARGS ${CMAKE_CURRENT_SOURCE_DIR}/data/art)
+xcat_add_test(test_synopsis)
+xcat_add_test(test_art)
 xcat_add_test(test_catalog)
 xcat_add_test(test_journal)
 xcat_add_test(test_install ARGS ${XCAT_FIXTURES_DIR})
@@ -123,6 +126,11 @@ add_dependencies(test_xdvdfs xcat_fixtures)
 xcat_add_test(test_extract)
 xcat_add_test(test_fatx)
 xcat_add_test(test_url)
+xcat_add_test(test_folder_image)
+xcat_add_test(test_sevenz ARGS ${CMAKE_CURRENT_SOURCE_DIR}/data/7z)
+xcat_add_test(test_arc_folder ARGS ${CMAKE_CURRENT_SOURCE_DIR}/data/zip)
+xcat_add_test(test_smb)
+xcat_add_test(test_netbios)
 xcat_add_test(test_http)
 xcat_add_test(test_http_client)
 # TLS against an in-process BearSSL server, with the committed test certificates.
@@ -272,6 +280,15 @@ xcat_add_fuzzer(fuzz_archiveorg SEEDS ${_archiveorg_seeds})
 file(GLOB _xbe_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/xbe/*.seed)
 xcat_add_fuzzer(fuzz_xbe SEEDS ${_xbe_seeds})
 
+# Picture, XPR0 and synopsis seeds are committed: the fixtures of data/art (made by
+# tools/fixtures/art/make.py) and synthetic textures and synopses.
+file(GLOB _picture_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/picture/*.seed)
+xcat_add_fuzzer(fuzz_picture SEEDS ${_picture_seeds})
+file(GLOB _xpr_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/xpr/*.seed)
+xcat_add_fuzzer(fuzz_xpr SEEDS ${_xpr_seeds})
+file(GLOB _synopsis_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/synopsis/*.seed)
+xcat_add_fuzzer(fuzz_synopsis SEEDS ${_synopsis_seeds})
+
 # Install marker seeds are committed: synthetic markers with placeholder names.
 file(GLOB _installed_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/installed/*.seed)
 xcat_add_fuzzer(fuzz_installed SEEDS ${_installed_seeds})
@@ -341,6 +358,23 @@ xcat_add_fuzzer(fuzz_tls_anchors SEEDS ${_tls_seeds})
 # SNTP answer seeds are committed, written by tools/fixtures/sntp_seeds.py.
 file(GLOB _sntp_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/sntp/*.seed)
 xcat_add_fuzzer(fuzz_sntp SEEDS ${_sntp_seeds})
+
+# smb:// URL seeds are committed (docs/formats/smb.md §1).
+file(GLOB _smb_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/smb/*.seed)
+xcat_add_fuzzer(fuzz_smb SEEDS ${_smb_seeds})
+
+# 7z seeds are the archives test_sevenz reads (tools/fixtures/sevenz/make.py).
+file(GLOB _sevenz_seeds ${CMAKE_CURRENT_SOURCE_DIR}/data/7z/*.7z)
+xcat_add_fuzzer(fuzz_sevenz SEEDS ${_sevenz_seeds})
+
+# Game folder listing seeds are committed (docs/formats/folder-image.md).
+file(GLOB _folder_image_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/folder-image/*.seed)
+xcat_add_fuzzer(fuzz_folder_image SEEDS ${_folder_image_seeds})
+
+# NetBIOS node status answer seeds are committed: synthetic answers as Samba and Windows send
+# them (docs/formats/smb.md §5).
+file(GLOB _netbios_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/netbios/*.seed)
+xcat_add_fuzzer(fuzz_netbios SEEDS ${_netbios_seeds})
 
 # Zip and Deflate seeds are committed, written by tools/fixtures/zip_seeds.py.
 file(GLOB _zip_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/zip/*.seed)

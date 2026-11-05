@@ -82,9 +82,9 @@ const char *xc_err_str(xc_err err)
         return "This zip can't be read: split archive, encryption or an unsupported compression "
                "method";
     case XC_ERR_ZIP_MEMBER:
-        return "The zip must hold exactly one .iso or .xiso image";
+        return "The archive holds no game: one .iso or .xiso image, or a folder with a default.xbe";
     case XC_ERR_ZIP_CRC:
-        return "The image in the zip failed its CRC-32 check (damaged download?)";
+        return "A file in the archive failed its CRC-32 check (damaged download?)";
     case XC_ERR_SOURCE_SIZE:
         return "The file isn't the size its listing gives (a different file?)";
     case XC_ERR_CATALOG:
@@ -93,6 +93,26 @@ const char *xc_err_str(xc_err err)
         return "The settings file is invalid";
     case XC_ERR_UI_SCRIPT:
         return "The UI script is invalid";
+    case XC_ERR_SMB_URL:
+        return "Invalid smb:// address";
+    case XC_ERR_SMB_LOGIN:
+        return "The NAS refused the user name or password";
+    case XC_ERR_SMB_SHARE:
+        return "The NAS has no shared folder of that name";
+    case XC_ERR_SMB_DENIED:
+        return "This login may not open that folder or file on the NAS";
+    case XC_ERR_SMB_NOT_FOUND:
+        return "The NAS has no folder or file of that name";
+    case XC_ERR_SMB:
+        return "The NAS (SMB) refused or failed the request";
+    case XC_ERR_GAME_FOLDER:
+        return "The game folder has a name or file that can't be installed";
+    case XC_ERR_NOT_7Z:
+        return "Not a 7z archive, or its list of files is damaged";
+    case XC_ERR_7Z_UNSUPPORTED:
+        return "This 7z uses a compression method or a password the console can't read";
+    case XC_ERR_7Z_MEMORY:
+        return "This 7z needs more memory to unpack than the console has free";
     case XC_ERR_COUNT_:
         break;
     }
@@ -178,15 +198,34 @@ const char *xc_err_action(xc_err err)
     case XC_ERR_ZIP_UNSUPPORTED:
         return "Repack the image as an ordinary zip: stored or Deflate, one file, no password.";
     case XC_ERR_ZIP_MEMBER:
-        return "Use a zip that holds exactly one .iso or .xiso image.";
+        return "Use an archive that holds one image, or one game or app folder.";
     case XC_ERR_ZIP_CRC:
-        return "Try again: the zip is downloaded again.";
+        return "Try again: the archive is read again.";
     case XC_ERR_CATALOG:
         return "Delete E:\\Apps\\xcat\\catalog.bin, or replace it with the release's.";
     case XC_ERR_SETTINGS:
         return "Fix or delete E:\\Apps\\xcat\\settings.";
     case XC_ERR_UI_SCRIPT:
         return "Fix the line the log names in ui-script.txt, or delete the file.";
+    case XC_ERR_SMB_URL:
+        return "Fix the address in the map: smb://<NAS>/<share>/<folder or file>.";
+    case XC_ERR_SMB_LOGIN:
+        return "Add the NAS again in SETTINGS > NAS with the right user name and password.";
+    case XC_ERR_SMB_SHARE:
+    case XC_ERR_SMB_NOT_FOUND:
+        return "Check the shared folder on the NAS, or add the NAS folder again in SETTINGS > NAS.";
+    case XC_ERR_SMB_DENIED:
+        return "Give this user read access to the shared folder in the NAS's settings.";
+    case XC_ERR_SMB:
+        return "Try again; if it keeps failing, check SMB2 or SMB3 is on in the NAS's settings.";
+    case XC_ERR_GAME_FOLDER:
+        return "The log names it: rename or remove it in the game's folder on the NAS.";
+    case XC_ERR_NOT_7Z:
+        return "Check the file on the NAS: 7-Zip's Test should say it's fine.";
+    case XC_ERR_7Z_UNSUPPORTED:
+        return "Repack it with 7-Zip: LZMA2, no password; or extract it on the NAS.";
+    case XC_ERR_7Z_MEMORY:
+        return "Repack it with 7-Zip at Normal level (16 MB dictionary), or extract it on the NAS.";
     case XC_ERR_COUNT_:
         break;
     }
@@ -210,6 +249,7 @@ bool xc_err_retry(xc_err err)
     case XC_ERR_TLS_NO_RANDOM:
     case XC_ERR_NTP:
     case XC_ERR_ZIP_CRC:
+    case XC_ERR_SMB:
         return true;
     default:
         return false;

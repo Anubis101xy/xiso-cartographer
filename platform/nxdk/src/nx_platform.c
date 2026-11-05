@@ -302,6 +302,19 @@ xc_err xc_nx_free_space(const char *path, uint64_t *free_bytes)
     return XC_OK;
 }
 
+xc_err xc_nx_disk_space(const char *path, uint64_t *free_bytes, uint64_t *total_bytes)
+{
+    ULARGE_INTEGER avail;
+    ULARGE_INTEGER total;
+    if (path == NULL || free_bytes == NULL || total_bytes == NULL ||
+        !GetDiskFreeSpaceExA(path, &avail, &total, NULL)) {
+        return XC_ERR_IO;
+    }
+    *free_bytes = avail.QuadPart;
+    *total_bytes = total.QuadPart;
+    return XC_OK;
+}
+
 uint32_t xc_nx_cluster_size(const char *root)
 {
     DWORD sectors = 0;

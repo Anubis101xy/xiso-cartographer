@@ -15,9 +15,9 @@ void tearDown(void) {}
 
 static ui_lib_item items[3] = {
     {"First game", "2004  |  Europe  |  4.38 GB", "By someone. From the map.", UI_LIB_NOT_TRIED,
-     NULL},
-    {"Second game", "", "From E:/xcat/isos.", UI_LIB_INSTALLED, "In E:/Games/Second game"},
-    {"Third game", "2002", NULL, UI_LIB_FAILED, "No space left"},
+     NULL, false},
+    {"Second game", "", "From E:/xcat/isos.", UI_LIB_INSTALLED, "In E:/Games/Second game", false},
+    {"Third game", "2002", NULL, UI_LIB_FAILED, "No space left", false},
 };
 
 static int shown[8]; /* the library's list of what GAMES shows */
@@ -38,6 +38,19 @@ static bool drawn_in(const char *s, ui_color c)
         const fake_call *f = &fake_log[i];
         if (f->kind == 't' && strcmp(f->text, s) == 0 && f->c.r == c.r && f->c.g == c.g &&
             f->c.b == c.b && f->c.a == c.a) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Whether text starting with `prefix` was drawn in colour c (a line cut to fit keeps it). */
+static bool drawn_prefix_in(const char *prefix, ui_color c)
+{
+    for (int i = 0; i < fake_log_n; i++) {
+        const fake_call *f = &fake_log[i];
+        if (f->kind == 't' && strncmp(f->text, prefix, strlen(prefix)) == 0 && f->c.r == c.r &&
+            f->c.g == c.g && f->c.b == c.b && f->c.a == c.a) {
             return true;
         }
     }
@@ -66,24 +79,233 @@ static void test_open(void)
     TEST_ASSERT_EQUAL_INT(11, ui_library_rows(&fake_draw));
 }
 
-/* Nothing installs unasked: A asks first, and only INSTALL installs. */
+/* Nothing installs unasked: A asks first, and only INSTALL installs; AS AN APP installs to the
+   apps folder. */
 static void test_install_asks_first(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, lib.asking);
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "First game"));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "E:\\Apps"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5)); /* CANCEL */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5)); /* to CANCEL */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_FALSE(ui_library_to_apps(&lib));
+    TEST_ASSERT_EQUAL_INT(0, lib.list.cur); /* the game asked about */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+    /* AS AN APP, the middle button */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_TRUE(ui_library_to_apps(&lib));
+}
+
+/* An item from an apps folder installs to E:\Apps first; AS A GAME to the install folder. */
+static void test_install_app(void)
+{
+    static const ui_lib_item apps[1] = {{"XBMC4Gamers", "", NULL, UI_LIB_NOT_TRIED, NULL, true}};
+    static int app_shown[1];
+    ui_library lib;
+    ui_library_open(&lib, apps, 1, app_shown);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "looks like an app"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_TRUE(ui_library_to_apps(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5)); /* AS A GAME */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_FALSE(ui_library_to_apps(&lib));
+}
+
+/* A game that isn't finished: CARRY ON installs, DELETE asks again (KEEP first). */
+static void test_unfinished_carry_on_or_delete(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, lib.asking);
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Third game isn't finished"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5)); /* CARRY ON */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5)); /* DELETE */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_DELETE, lib.asking);
+    TEST_ASSERT_EQUAL_STRING("ask-delete", ui_library_screen(&lib));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "unfinished install of Third game"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5)); /* KEEP, the default */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_LEFT, 5)); /* to DELETE */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_DELETE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(2, ui_library_game(&lib));
+}
+
+/* An installed game: A asks to play it; in GAMES it can also be installed again, in INSTALLED
+   deleted. An unfinished one in INSTALLED: A asks to delete it. */
+static void test_play_installed(void)
 {
     ui_library lib;
     ui_library_open(&lib, items, 3, shown);
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
-    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, lib.asking);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PLAY, lib.asking);
+    TEST_ASSERT_EQUAL_STRING("ask-play", ui_library_screen(&lib));
     TEST_ASSERT_NOT_NULL(strstr(lib.message, "Second game"));
-    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5)); /* CANCEL */
-    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PLAY, ui_library_input(&lib, UI_BTN_A, 5));
+    /* INSTALL AGAIN, the middle button */
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
-    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5)); /* to CANCEL */
-    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
-    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5));
-    TEST_ASSERT_EQUAL_INT(1, lib.list.cur); /* the game asked about */
+    /* B cancels */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+
+    static const ui_lib_item found[2] = {
+        {"Halo", "4.1 GB", NULL, UI_LIB_INSTALLED, "E:\\Games\\Halo", false},
+        {"Fable", NULL, NULL, UI_LIB_UNFINISHED, "E:\\Games\\Fable", false},
+    };
+    ui_library_set_installed(&lib, found, 2);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_LEFT, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALLED_GAMES, lib.section);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PLAY, lib.asking);
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Halo"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PLAY, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(0, ui_library_installed(&lib));
+    /* PLAY's DELETE asks again; DELETE there deletes. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_RIGHT, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_DELETE, lib.asking);
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Delete Halo?"));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "UDATA"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_LEFT, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_DELETE, ui_library_input(&lib, UI_BTN_A, 5));
+    /* The unfinished one: A asks to delete it. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_DELETE, lib.asking);
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "unfinished install of Fable"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+}
+
+/* SETTINGS > NAS: scan, type an address or pick a server, log in, browse, add a folder. */
+static void test_nas(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_LEFT, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_SETTINGS, lib.section);
+    for (int i = 0; i < UI_LIB_SETTING_NAS; i++) {
+        TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    }
+    /* Opening the page lets the caller fill it in. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_PAGE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_STRING("nas", ui_library_screen(&lib));
+    ui_library_set_console(&lib, "This Xbox: 192.168.1.23");
+    /* No NAS yet: "Find a NAS" is first. */
+    TEST_ASSERT_EQUAL_INT(-1, ui_library_nas(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_SCAN, ui_library_input(&lib, UI_BTN_A, 5));
+    static const ui_lib_nas found[2] = {
+        {"TNAS-F4", "192.168.1.50", "192.168.1.50, workgroup WORKGROUP", "xbox"},
+        {"PC", "192.168.1.20", "192.168.1.20", NULL}};
+    ui_library_set_nas(&lib, found, 2, "2 found.");
+    TEST_ASSERT_EQUAL_INT(4, lib.nas_list.count);
+    TEST_ASSERT_EQUAL_INT(0, ui_library_nas(&lib)); /* the saved one, first */
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(drawn_prefix_in("This Xbox", ui_col_accent));
+    TEST_ASSERT_TRUE(count_text("Logged in as xbox before: A opens its shared folders. X logs in "
+                                "as someone else.") > 0 ||
+                     count_kind('t') > 0);
+    /* A saved login: no keyboard. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_SAVED, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_STRING("192.168.1.50", lib.nas_addr);
+    /* X: someone else, from the saved user name. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_X, 5));
+    TEST_ASSERT_EQUAL_STRING("keyboard-nas-user", ui_library_screen(&lib));
+    TEST_ASSERT_EQUAL_STRING("xbox", lib.nas_user);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5));
+    /* No saved login: user name, then password. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(1, ui_library_nas(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_STRING("192.168.1.20", lib.nas_addr);
+    TEST_ASSERT_EQUAL_STRING("keyboard-nas-user", ui_library_screen(&lib));
+    (void)snprintf(lib.nas_user, sizeof lib.nas_user, "%s", "shaun");
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_START, 5));
+    TEST_ASSERT_EQUAL_STRING("keyboard-nas-password", ui_library_screen(&lib));
+    TEST_ASSERT_TRUE(lib.kbd.password);
+    (void)snprintf(lib.nas_password, sizeof lib.nas_password, "%s", "secret");
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_LOGIN, ui_library_input(&lib, UI_BTN_START, 5));
+    ui_library_forget_nas_password(&lib);
+    TEST_ASSERT_EQUAL_STRING("", lib.nas_password);
+    /* Its shares: no "add" line at the top; X adds a whole share. */
+    static const ui_lib_entry shares[2] = {{"Games", "Xbox games"}, {"Media", NULL}};
+    ui_library_browse(&lib, "TNAS-F4", "2 shared folders.", shares, 2, NULL);
+    TEST_ASSERT_EQUAL_STRING("nas-browse", ui_library_screen(&lib));
+    TEST_ASSERT_EQUAL_INT(0, ui_library_browse_entry(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_OPEN, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_X, 5));
+    TEST_ASSERT_EQUAL_STRING("ask-nas-use", ui_library_screen(&lib));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Add TNAS-F4 > Games to GAMES?"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5)); /* CANCEL */
+    /* A folder: its "add" line first, asked about before it's added. */
+    static const ui_lib_entry folders[2] = {{"Halo (USA)", NULL}, {"Xbox", NULL}};
+    ui_library_browse(&lib, "TNAS-F4 > Games", "3 images here.", folders, 2,
+                      "Add this folder to GAMES");
+    TEST_ASSERT_EQUAL_INT(-1, ui_library_browse_entry(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_STRING("ask-nas-use", ui_library_screen(&lib));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Add TNAS-F4 > Games to GAMES?"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_USE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(-1, ui_library_nas_pick(&lib));
+    /* X on a folder adds that one, by name, without opening it. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
+    TEST_ASSERT_EQUAL_INT(1, ui_library_browse_entry(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_X, 5));
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Add TNAS-F4 > Games > Xbox to GAMES?"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_USE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(1, ui_library_nas_pick(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_OPEN, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_UP, ui_library_input(&lib, UI_BTN_B, 5));
+    ui_library_nas_page(&lib);
+    TEST_ASSERT_EQUAL_STRING("nas", ui_library_screen(&lib));
+    /* Type an address; no user name logs in as a guest, with no password asked. */
+    for (int i = 0; i < 4; i++) {
+        (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    }
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_STRING("keyboard-nas-address", ui_library_screen(&lib));
+    (void)snprintf(lib.nas_addr, sizeof lib.nas_addr, "%s", "nas.lan:4450");
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_START, 5));
+    lib.nas_user[0] = '\0';
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NAS_LOGIN, ui_library_input(&lib, UI_BTN_START, 5));
+    /* Drawn without trouble on each page. */
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    ui_library_browse(&lib, "TNAS-F4", NULL, NULL, 0, NULL);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(count_text("Nothing here this login can open. B goes back.") > 0 ||
+                     count_kind('t') > 0);
 }
 
 static void test_back_asks_before_leaving(void)
@@ -178,7 +400,7 @@ static void test_draw(void)
 
 static void test_stopped(void)
 {
-    const ui_lib_item stopped[1] = {{"Game", "", NULL, UI_LIB_STOPPED, "Stopped."}};
+    const ui_lib_item stopped[1] = {{"Game", "", NULL, UI_LIB_STOPPED, "Stopped.", false}};
     ui_library lib;
     ui_library_open(&lib, stopped, 1, shown);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
@@ -189,7 +411,7 @@ static void test_stopped(void)
 /* Started in an earlier run: UNFINISHED, and counted as unfinished. */
 static void test_unfinished(void)
 {
-    const ui_lib_item half[1] = {{"Game", "", NULL, UI_LIB_UNFINISHED, "In E:/Games/Game"}};
+    const ui_lib_item half[1] = {{"Game", "", NULL, UI_LIB_UNFINISHED, "In E:/Games/Game", false}};
     ui_library lib;
     ui_library_open(&lib, half, 1, shown);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
@@ -199,8 +421,9 @@ static void test_unfinished(void)
 }
 
 static const ui_lib_item found[2] = {
-    {"Alpha folder", "1.00 GB  |  12 files", "Title 4D53000A.", UI_LIB_INSTALLED, "E:/Games/A"},
-    {"Beta folder", "", "Not finished.", UI_LIB_UNFINISHED, "E:/Games/B"},
+    {"Alpha folder", "1.00 GB  |  12 files", "Title 4D53000A.", UI_LIB_INSTALLED, "E:/Games/A",
+     false},
+    {"Beta folder", "", "Not finished.", UI_LIB_UNFINISHED, "E:/Games/B", false},
 };
 
 /* INSTALLED: its own list and place; A installs nothing there. */
@@ -225,6 +448,8 @@ static void test_installed_section(void)
     TEST_ASSERT_EQUAL_INT(1, lib.installed_list.cur);
     TEST_ASSERT_EQUAL_INT(0, lib.list.cur); /* GAMES keeps its place */
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_DELETE, lib.asking); /* unfinished: A asks to delete it */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
     fake_reset();
     ui_library_draw(&fake_draw, &lib, 0, NULL);
@@ -240,6 +465,368 @@ static void test_installed_section(void)
     fake_reset();
     ui_library_draw(&fake_draw, &lib, 0, NULL);
     TEST_ASSERT_TRUE(fake_saw("Nothing installed yet"));
+}
+
+/* A highlighted name too wide for the list waits, slides to its end, waits, and starts again;
+   one that fits, or a list the buttons don't move, stays still. */
+static void test_long_name_slides(void)
+{
+    const char *name = "A game whose name is far too long"; /* 33 code points: 330 px */
+    ui_lib_item two[2] = {{name, "", "", UI_LIB_NOT_TRIED, NULL, false},
+                          {"Short", "", "", UI_LIB_NOT_TRIED, NULL, false}};
+    int sh[2];
+    ui_library lib;
+    ui_library_open(&lib, two, 2, sh);
+    TEST_ASSERT_FALSE(ui_library_tick(&lib, 1000)); /* nothing drawn yet */
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    int over = 330 - (196 - 2 * 10); /* the list's lines are 196 wide, text 10 in */
+    TEST_ASSERT_EQUAL_INT(over, lib.slide_over);
+    TEST_ASSERT_TRUE(fake_find_text(name) < 0); /* cut with an ellipsis while it waits */
+
+    TEST_ASSERT_FALSE(ui_library_tick(&lib, 1000 + UI_SLIDE_WAIT_MS - 1));
+    TEST_ASSERT_TRUE(ui_library_tick(&lib, 1000 + UI_SLIDE_WAIT_MS + 3 * UI_SLIDE_STEP_MS));
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    int i = fake_find_text(name);
+    TEST_ASSERT_TRUE(i >= 0);
+    TEST_ASSERT_EQUAL_INT(218 + 10 - 4, fake_log[i].r.x);
+    TEST_ASSERT_FALSE(ui_library_tick(&lib, 1000 + UI_SLIDE_WAIT_MS + 3 * UI_SLIDE_STEP_MS + 1));
+
+    uint32_t end = 1000 + UI_SLIDE_WAIT_MS + (uint32_t)over * UI_SLIDE_STEP_MS;
+    TEST_ASSERT_TRUE(ui_library_tick(&lib, end + 10));
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    i = fake_find_text(name);
+    TEST_ASSERT_TRUE(i >= 0);
+    TEST_ASSERT_EQUAL_INT(218 + 10 - over, fake_log[i].r.x);             /* its end at the row's */
+    TEST_ASSERT_TRUE(ui_library_tick(&lib, end + UI_SLIDE_HOLD_MS + 1)); /* back to the start */
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_EQUAL_INT(0, lib.slide_px);
+
+    /* The next line fits: nothing slides. Back on the long one, it waits again. */
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    (void)ui_library_tick(&lib, 20000); /* the press redraws anyway */
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_EQUAL_INT(0, lib.slide_over);
+    TEST_ASSERT_FALSE(ui_library_tick(&lib, 25000));
+    (void)ui_library_input(&lib, UI_BTN_UP, 5);
+    (void)ui_library_tick(&lib, 30000);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_FALSE(ui_library_tick(&lib, 30000 + UI_SLIDE_WAIT_MS - 1));
+    TEST_ASSERT_TRUE(ui_library_tick(&lib, 30000 + UI_SLIDE_WAIT_MS));
+
+    /* In the sections, the list stands still. */
+    (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
+    (void)ui_library_tick(&lib, 40000);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_FALSE(ui_library_tick(&lib, 40000 + UI_SLIDE_WAIT_MS + 50));
+    TEST_ASSERT_EQUAL_INT(0, lib.slide_px);
+}
+
+/* The picture and details the caller found for the item shown: drawn at the top of the
+   details, in place of the item's name, facts and about, and only for that item. */
+static void test_art(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    ui_lib_section sec;
+    int item = -1;
+    TEST_ASSERT_TRUE(ui_library_shown_item(&lib, &sec, &item));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_GAMES, sec);
+    TEST_ASSERT_EQUAL_INT(0, item);
+
+    static uint32_t px[100 * 140];
+    for (size_t i = 0; i < sizeof px / sizeof px[0]; i++) {
+        px[i] = 0xFF102030U;
+    }
+    ui_lib_art art = {px, 100, 140, "The Real Title", "2004  |  PAL", "Made by someone."};
+    ui_library_set_art(&lib, UI_LIB_GAMES, 0, &art);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    int p = -1;
+    for (int i = 0; i < fake_log_n; i++) {
+        if (fake_log[i].kind == 'p') {
+            p = i;
+        }
+    }
+    TEST_ASSERT_TRUE(p >= 0);
+    TEST_ASSERT_EQUAL_INT(430 + (178 - 100) / 2, fake_log[p].r.x); /* centred in the details */
+    TEST_ASSERT_EQUAL_INT(90, fake_log[p].r.y);
+    TEST_ASSERT_EQUAL_INT(0x10, fake_log[p].c.r);
+    TEST_ASSERT_TRUE(fake_find_text("The Real Title") >= 0);
+    TEST_ASSERT_TRUE(fake_log[fake_find_text("The Real Title")].r.y >= 90 + UI_LIB_ART_H);
+    TEST_ASSERT_TRUE(fake_find_text("2004  |  PAL") >= 0);
+    TEST_ASSERT_TRUE(fake_saw("Made by someone."));
+    TEST_ASSERT_TRUE(fake_find_text("First game") >= 0); /* the list keeps its name */
+    TEST_ASSERT_FALSE(fake_saw("By someone. From the map."));
+
+    /* Another game highlighted: its own details, no picture. */
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    for (int i = 0; i < fake_log_n; i++) {
+        TEST_ASSERT_TRUE(fake_log[i].kind != 'p');
+    }
+    TEST_ASSERT_FALSE(fake_saw("The Real Title"));
+    /* The same index in INSTALLED isn't GAMES' game. */
+    ui_library_set_installed(&lib, found, 2);
+    (void)ui_library_input(&lib, UI_BTN_UP, 5);
+    (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    TEST_ASSERT_TRUE(ui_library_shown_item(&lib, &sec, &item));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALLED_GAMES, sec);
+    TEST_ASSERT_EQUAL_INT(0, item);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_FALSE(fake_saw("The Real Title"));
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5); /* to SETTINGS: nothing shown */
+    TEST_ASSERT_FALSE(ui_library_shown_item(&lib, &sec, &item));
+}
+
+/* Details too long for the panel: White and Black move them a line at a time, within range,
+   and the footer says so; another item starts at the top again. */
+static void test_detail_scroll(void)
+{
+    static char about[1200];
+    about[0] = '\0';
+    for (int i = 0; i < 40; i++) {
+        char w[16];
+        (void)snprintf(w, sizeof w, "line%02d ", i); /* 7 code points: two to a 154 px line */
+        strcat(about, w);
+    }
+    ui_lib_item two[2] = {{"Game", "", about, UI_LIB_NOT_TRIED, NULL, false},
+                          {"Other", "", "Short.", UI_LIB_NOT_TRIED, NULL, false}};
+    int sh[2];
+    ui_library lib;
+    ui_library_open(&lib, two, 2, sh);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(lib.detail_lines > lib.detail_fit);
+    TEST_ASSERT_TRUE(fake_saw("White Black more"));
+    TEST_ASSERT_TRUE(fake_saw("line00"));
+    (void)ui_library_input(&lib, UI_BTN_WHITE, 5); /* already at the top */
+    TEST_ASSERT_EQUAL_INT(0, lib.detail_scroll);
+    (void)ui_library_input(&lib, UI_BTN_BLACK, 5);
+    (void)ui_library_input(&lib, UI_BTN_BLACK, 5);
+    TEST_ASSERT_EQUAL_INT(2, lib.detail_scroll);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("line00 line01") < 0);  /* measured, not drawn */
+    TEST_ASSERT_TRUE(fake_find_text("line04 line05") >= 0); /* the third line first */
+    for (int i = 0; i < 100; i++) {
+        (void)ui_library_input(&lib, UI_BTN_BLACK, 5);
+        fake_reset();
+        ui_library_draw(&fake_draw, &lib, 0, NULL);
+    }
+    TEST_ASSERT_EQUAL_INT(lib.detail_lines - lib.detail_fit, lib.detail_scroll); /* the end */
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("line38 line39") >= 0);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_EQUAL_INT(0, lib.detail_scroll);
+    TEST_ASSERT_FALSE(fake_saw("White Black more"));
+}
+
+/* The top panel: the console's address, the NAS's, and the drives' space; a search takes its
+   place. */
+static void test_top_panel(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("XBOX") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("-") >= 0);    /* no address given */
+    TEST_ASSERT_TRUE(fake_find_text("none") >= 0); /* no NAS */
+    TEST_ASSERT_TRUE(fake_find_text("space not read") >= 0);
+
+    ui_lib_top top = {"192.168.1.23", "192.168.1.50", false};
+    ui_library_set_top(&lib, &top);
+    const ui_lib_disk e = {"E:", 412000000000ULL, 931500000000ULL};
+    ui_library_set_disks(&lib, &e, 1);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    int x = fake_find_text("192.168.1.23");
+    int n = fake_find_text("192.168.1.50");
+    TEST_ASSERT_TRUE(x >= 0 && n >= 0);
+    TEST_ASSERT_TRUE(fake_log[x].r.x < fake_log[n].r.x); /* the console left, the NAS right */
+    TEST_ASSERT_EQUAL_INT(24 + (46 - 2 * 20) / 2, fake_log[x].r.y); /* two lines, centred */
+    TEST_ASSERT_TRUE(fake_find_text("412 GB free of 931 GB") >= 0);
+    int bars = 0;
+    for (int i = 0; i < fake_log_n; i++) {
+        if (fake_log[i].kind == 'f' && fake_log[i].r.h == 5 && fake_log[i].r.y < 80) {
+            bars++;
+        }
+    }
+    TEST_ASSERT_EQUAL_INT(2, bars); /* the track and what's used */
+
+    top.nas_off = true;
+    ui_library_set_top(&lib, &top);
+    const ui_lib_disk two[2] = {{"F:", 1210000000000ULL, 1840000000000ULL},
+                                {"E:", 3900000000ULL, 4800000000ULL}};
+    ui_library_set_disks(&lib, two, 2);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_saw("192.168.1.50 off")); /* cut in the fake's wide font */
+    TEST_ASSERT_TRUE(fake_find_text("1.21 TB free") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("3.90 GB free") >= 0);
+    TEST_ASSERT_FALSE(fake_saw("of 1.84 TB"));
+
+    /* A long address is cut, not drawn over the NAS's. */
+    top =
+        (ui_lib_top){"an address far too long to fit beside the other one", "192.168.1.50", false};
+    ui_library_set_top(&lib, &top);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    n = fake_find_text("192.168.1.50");
+    TEST_ASSERT_TRUE(n >= 0);
+    int label = -1; /* the NAS's label, left of its address */
+    for (int i = 0; i < fake_log_n; i++) {
+        if (fake_log[i].kind == 't' && strcmp(fake_log[i].text, "NAS") == 0) {
+            label = i;
+        }
+    }
+    TEST_ASSERT_TRUE(label >= 0);
+    for (int i = 0; i < fake_log_n; i++) {
+        if (fake_log[i].kind == 't' && fake_log[i].r.y == fake_log[n].r.y &&
+            fake_log[i].r.x < fake_log[label].r.x) {
+            int cps = 0; /* code points, FAKE_CP_W each */
+            for (const char *p = fake_log[i].text; *p != '\0'; p++) {
+                cps += ((unsigned char)*p & 0xC0U) != 0x80U;
+            }
+            TEST_ASSERT_TRUE(fake_log[i].r.x + cps * 10 <= fake_log[label].r.x - 16);
+        }
+    }
+}
+
+static int sign(int v)
+{
+    return v < 0 ? -1 : v > 0 ? 1 : 0;
+}
+
+/* Names in the order a list of games reads. */
+static void test_name_order(void)
+{
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("Halo 2", "Halo 10")));
+    TEST_ASSERT_EQUAL_INT(1, sign(ui_library_name_cmp("Halo 10", "Halo 2")));
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("halo", "Halo 2"))); /* shorter */
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("blinx", "Crash"))); /* case folded */
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("Fable", "fable"))); /* then bytes */
+    TEST_ASSERT_EQUAL_INT(0, ui_library_name_cmp("Fable", "Fable"));
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("007 Agent", "7 Days"))); /* 7 = 7 */
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("Disc 9", "Disc 10")));
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("Game 99999999999999999999", "Game a")));
+    TEST_ASSERT_EQUAL_INT(
+        1, sign(ui_library_name_cmp("Game 100000000000000000000", "Game 99999999999999999999")));
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("", "A")));
+    /* Every pair of different names is ordered one way only. */
+    const char *names[] = {"Halo", "halo", "Halo 2", "Halo 02", "Halo 10", "Halo: CE",
+                           "",     "0",    "00",     "a0",      "a00",     "\xC3\x89lan"};
+    int n = (int)(sizeof names / sizeof names[0]);
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            int c = sign(ui_library_name_cmp(names[i], names[j]));
+            TEST_ASSERT_EQUAL_INT(-sign(ui_library_name_cmp(names[j], names[i])), c);
+            TEST_ASSERT_EQUAL_INT(i == j ? 0 : c, c);
+            if (i != j) {
+                TEST_ASSERT_TRUE(c != 0);
+            }
+            for (int k = 0; k < n; k++) { /* transitive */
+                if (c < 0 && ui_library_name_cmp(names[j], names[k]) < 0) {
+                    TEST_ASSERT_TRUE(ui_library_name_cmp(names[i], names[k]) < 0);
+                }
+            }
+        }
+    }
+}
+
+/* The fills of the summary's drive bars drawn (5 pixels high, left of the list), their widths
+   in `w`; returns how many. */
+static int disk_bars(int *w, int max)
+{
+    int n = 0;
+    for (int i = 0; i < fake_log_n; i++) {
+        if (fake_log[i].kind == 'f' && fake_log[i].r.h == 5 && fake_log[i].r.x < 210) {
+            if (n < max) {
+                w[n] = fake_log[i].r.w;
+            }
+            n++;
+        }
+    }
+    return n;
+}
+
+/* INSTALLED's summary shows the drives' space: free, a bar of what's used, and the size when
+   every drive's fits; the other sections keep the counts. */
+static void test_installed_disks(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    ui_library_set_installed(&lib, found, 2);
+    (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALLED_GAMES, lib.section);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("SUMMARY") >= 0); /* no drives given: the counts */
+    TEST_ASSERT_TRUE(fake_find_text("HARD DRIVE") < 0);
+
+    /* One drive: 519.5 GB of 931.5 GB used, so 81 of the bar's 146 pixels. */
+    const ui_lib_disk e = {"E:", 412000000000ULL, 931500000000ULL};
+    ui_library_set_disks(&lib, &e, 1);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("HARD DRIVE") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("SUMMARY") < 0);
+    TEST_ASSERT_TRUE(fake_find_text("E: 412 GB free") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("of 931 GB") >= 0);
+    int w[4];
+    TEST_ASSERT_EQUAL_INT(2, disk_bars(w, 4)); /* the track, then what's used */
+    TEST_ASSERT_EQUAL_INT(146, w[0]);
+    TEST_ASSERT_EQUAL_INT(81, w[1]);
+
+    /* Three drives: two fit, without their sizes. */
+    const ui_lib_disk three[3] = {
+        {"F:", 0, 1500000000000ULL}, {"E:", 4380000000ULL, 8000000000ULL}, {"G:", 1000, 2000}};
+    ui_library_set_disks(&lib, three, 3);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_saw("F: 0 bytes free"));
+    TEST_ASSERT_TRUE(fake_saw("E: 4.38 GB free"));
+    TEST_ASSERT_FALSE(fake_saw("G:"));
+    TEST_ASSERT_FALSE(fake_saw("of "));
+    TEST_ASSERT_EQUAL_INT(4, disk_bars(w, 4));
+    TEST_ASSERT_EQUAL_INT(146, w[1]); /* F: is full */
+    TEST_ASSERT_EQUAL_INT(66, w[3]);  /* E: 3.62 of 8 GB */
+
+    /* A size that isn't known: no bar. A drive with a byte used still shows it. */
+    const ui_lib_disk two[2] = {{"E:", 5, 0}, {"F:", 999999999999ULL, 1000000000000ULL}};
+    ui_library_set_disks(&lib, two, 2);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_saw("E: 5 bytes free"));
+    TEST_ASSERT_EQUAL_INT(2, disk_bars(w, 4));
+    TEST_ASSERT_EQUAL_INT(1, w[1]);
+
+    /* GAMES keeps the counts. */
+    (void)ui_library_input(&lib, UI_BTN_UP, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_GAMES, lib.section);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("SUMMARY") >= 0);
+    TEST_ASSERT_FALSE(fake_saw("HARD DRIVE"));
+
+    /* No drives again: the counts in INSTALLED too. */
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    ui_library_set_disks(&lib, NULL, 2);
+    TEST_ASSERT_EQUAL_INT(0, lib.disk_count);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("SUMMARY") >= 0);
 }
 
 /* A dialog draws over the screen behind, saved in its first frame and copied after. */
@@ -291,10 +878,10 @@ static void type(ui_library *lib, const char *word)
 }
 
 static const ui_lib_item many[4] = {
-    {"Racing One", "2003  |  USA", "By Studio Fast.", UI_LIB_NOT_TRIED, NULL},
-    {"Puzzle Two", "2004", "From E:/xcat/isos.", UI_LIB_NOT_TRIED, NULL},
-    {"Racing Three", "2005  |  Europe", NULL, UI_LIB_INSTALLED, "In E:/Games/Racing Three"},
-    {"Fighter", NULL, "By Studio Fast.", UI_LIB_NOT_TRIED, NULL},
+    {"Racing One", "2003  |  USA", "By Studio Fast.", UI_LIB_NOT_TRIED, NULL, false},
+    {"Puzzle Two", "2004", "From E:/xcat/isos.", UI_LIB_NOT_TRIED, NULL, false},
+    {"Racing Three", "2005  |  Europe", NULL, UI_LIB_INSTALLED, "In E:/Games/Racing Three", false},
+    {"Fighter", NULL, "By Studio Fast.", UI_LIB_NOT_TRIED, NULL, false},
 };
 
 static void test_matches(void)
@@ -663,8 +1250,8 @@ static void test_sources(void)
 static void test_set_items(void)
 {
     static ui_lib_item two[2] = {
-        {"Alpha", "", NULL, UI_LIB_NOT_TRIED, NULL},
-        {"Beta", "", NULL, UI_LIB_NOT_TRIED, NULL},
+        {"Alpha", "", NULL, UI_LIB_NOT_TRIED, NULL, false},
+        {"Beta", "", NULL, UI_LIB_NOT_TRIED, NULL, false},
     };
     static int shown2[2];
     ui_library lib;
@@ -798,6 +1385,10 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_open);
     RUN_TEST(test_install_asks_first);
+    RUN_TEST(test_install_app);
+    RUN_TEST(test_unfinished_carry_on_or_delete);
+    RUN_TEST(test_play_installed);
+    RUN_TEST(test_nas);
     RUN_TEST(test_back_asks_before_leaving);
     RUN_TEST(test_sections);
     RUN_TEST(test_empty);
@@ -805,6 +1396,12 @@ int main(void)
     RUN_TEST(test_stopped);
     RUN_TEST(test_unfinished);
     RUN_TEST(test_installed_section);
+    RUN_TEST(test_installed_disks);
+    RUN_TEST(test_name_order);
+    RUN_TEST(test_long_name_slides);
+    RUN_TEST(test_top_panel);
+    RUN_TEST(test_art);
+    RUN_TEST(test_detail_scroll);
     RUN_TEST(test_dialog_over_backdrop);
     RUN_TEST(test_matches);
     RUN_TEST(test_search);

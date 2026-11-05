@@ -49,6 +49,23 @@ typedef const char *ui_list_line(void *ctx, int i);
 void ui_list_draw(const ui_draw *d, const ui_list *l, ui_rect r, ui_list_line *line, void *ctx,
                   bool idle);
 
+/* How many pixels the highlighted line is wider than its row as ui_list_draw draws it in r
+   (so how far it can slide); 0 if it fits, or if there are no lines. */
+int ui_list_overflow(const ui_draw *d, const ui_list *l, ui_rect r, ui_list_line *line, void *ctx);
+
+/* ui_list_draw with the highlighted line moved `slide` pixels to the left, whole and cut at its
+   row's edges, rather than ended with an ellipsis; slide 0 is ui_list_draw. */
+void ui_list_draw_slid(const ui_draw *d, const ui_list *l, ui_rect r, ui_list_line *line, void *ctx,
+                       bool idle, int slide);
+
+/* How far a line `overflow` pixels too wide has slid `ms` after it was highlighted: still for
+   UI_SLIDE_WAIT_MS, then one pixel every UI_SLIDE_STEP_MS to its end, still there for
+   UI_SLIDE_HOLD_MS, then back to the start, and again. 0 if overflow is 0 or less. */
+#define UI_SLIDE_WAIT_MS 1200U
+#define UI_SLIDE_STEP_MS 30U
+#define UI_SLIDE_HOLD_MS 1500U
+int ui_slide_offset(uint32_t ms, int overflow);
+
 /* ---- Progress bar. */
 
 /* done / total in whole percent, rounded down: 100 only once done reaches total. 0 if total

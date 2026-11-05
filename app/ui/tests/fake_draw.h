@@ -17,7 +17,8 @@
 #define FAKE_LOG 4096
 
 typedef struct fake_call {
-    char kind; /* 't' text drawn, 'w' width measured, 'f' fill, 's' save_backdrop, 'b' backdrop */
+    char kind; /* 't' text drawn, 'w' width measured, 'f' fill, 's' save_backdrop, 'b' backdrop,
+                  'p' pixels (r: where, c: the first pixel's colour) */
     ui_font font;
     ui_rect r; /* x, y of text; the rectangle of a fill */
     ui_color c;

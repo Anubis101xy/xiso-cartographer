@@ -1,9 +1,12 @@
 # libxcat: portable core. Must not depend on nxdk or any platform headers.
 include(${PROJECT_SOURCE_DIR}/cmake/BearSSL.cmake)
 include(${PROJECT_SOURCE_DIR}/cmake/miniz.cmake)
+include(${PROJECT_SOURCE_DIR}/cmake/lzma.cmake)
+include(${PROJECT_SOURCE_DIR}/cmake/stb.cmake)
 
 add_library(xcat
   src/archiveorg.c
+  src/art.c
   src/catalog.c
   src/crc32.c
   src/credentials.c
@@ -12,6 +15,8 @@ add_library(xcat
   src/fatx.c
   src/hash.c
   src/http.c
+  src/arc_folder.c
+  src/folder_image.c
   src/http_client.c
   src/install.c
   src/installed.c
@@ -19,11 +24,17 @@ add_library(xcat
   src/json.c
   src/login.c
   src/settings.c
+  src/sevenz.c
+  src/smb.c
   src/map.c
   src/map_edit.c
+  src/md4.c
+  src/netbios.c
+  src/picture.c
   src/seq.c
   src/source.c
   src/sntp.c
+  src/synopsis.c
   src/text.c
   src/tls.c
   src/ui_script.c
@@ -31,8 +42,10 @@ add_library(xcat
   src/version.c
   src/xbe.c
   src/xdvdfs.c
+  src/xpr.c
   src/zip.c
   src/zip_read.c
+  src/zip_folder.c
 )
 add_library(xcat::xcat ALIAS xcat)
 
@@ -53,4 +66,4 @@ target_include_directories(xcat PUBLIC include)
 target_compile_features(xcat PUBLIC c_std_11)
 xcat_target_warnings(xcat)
 # Only tls.c and hash.c use BearSSL (ADR 0005).
-target_link_libraries(xcat PRIVATE bearssl miniz_tinfl)
+target_link_libraries(xcat PRIVATE bearssl miniz_tinfl lzma_sdk stb_image)
