@@ -100,8 +100,16 @@ static void backdrop(void *ctx)
     (void)next_call('b');
 }
 
-const ui_draw fake_draw = {NULL, fill,  text,       width,         line_height,
-                           clip, image, image_size, save_backdrop, backdrop};
+static void pixels(void *ctx, const uint32_t *px, int w, int h, int x, int y)
+{
+    (void)ctx;
+    fake_call *c = next_call('p');
+    c->r = (ui_rect){x, y, w, h};
+    c->c = (ui_color){(uint8_t)(px[0] >> 16U), (uint8_t)(px[0] >> 8U), (uint8_t)px[0], 255};
+}
+
+const ui_draw fake_draw = {NULL,  fill,       text,          width,    line_height, clip,
+                           image, image_size, save_backdrop, backdrop, pixels};
 
 void fake_reset(void)
 {

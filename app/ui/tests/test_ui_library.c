@@ -467,12 +467,290 @@ static void test_installed_section(void)
     TEST_ASSERT_TRUE(fake_saw("Nothing installed yet"));
 }
 
-/* The fills of the drive bars drawn (5 pixels high), their widths in `w`; returns how many. */
+/* A highlighted name too wide for the list waits, slides to its end, waits, and starts again;
+   one that fits, or a list the buttons don't move, stays still. */
+static void test_long_name_slides(void)
+{
+    const char *name = "A game whose name is far too long"; /* 33 code points: 330 px */
+    ui_lib_item two[2] = {{name, "", "", UI_LIB_NOT_TRIED, NULL, false},
+                          {"Short", "", "", UI_LIB_NOT_TRIED, NULL, false}};
+    int sh[2];
+    ui_library lib;
+    ui_library_open(&lib, two, 2, sh);
+    TEST_ASSERT_FALSE(ui_library_tick(&lib, 1000)); /* nothing drawn yet */
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    int over = 330 - (196 - 2 * 10); /* the list's lines are 196 wide, text 10 in */
+    TEST_ASSERT_EQUAL_INT(over, lib.slide_over);
+    TEST_ASSERT_TRUE(fake_find_text(name) < 0); /* cut with an ellipsis while it waits */
+
+    TEST_ASSERT_FALSE(ui_library_tick(&lib, 1000 + UI_SLIDE_WAIT_MS - 1));
+    TEST_ASSERT_TRUE(ui_library_tick(&lib, 1000 + UI_SLIDE_WAIT_MS + 3 * UI_SLIDE_STEP_MS));
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    int i = fake_find_text(name);
+    TEST_ASSERT_TRUE(i >= 0);
+    TEST_ASSERT_EQUAL_INT(218 + 10 - 4, fake_log[i].r.x);
+    TEST_ASSERT_FALSE(ui_library_tick(&lib, 1000 + UI_SLIDE_WAIT_MS + 3 * UI_SLIDE_STEP_MS + 1));
+
+    uint32_t end = 1000 + UI_SLIDE_WAIT_MS + (uint32_t)over * UI_SLIDE_STEP_MS;
+    TEST_ASSERT_TRUE(ui_library_tick(&lib, end + 10));
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    i = fake_find_text(name);
+    TEST_ASSERT_TRUE(i >= 0);
+    TEST_ASSERT_EQUAL_INT(218 + 10 - over, fake_log[i].r.x);             /* its end at the row's */
+    TEST_ASSERT_TRUE(ui_library_tick(&lib, end + UI_SLIDE_HOLD_MS + 1)); /* back to the start */
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_EQUAL_INT(0, lib.slide_px);
+
+    /* The next line fits: nothing slides. Back on the long one, it waits again. */
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    (void)ui_library_tick(&lib, 20000); /* the press redraws anyway */
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_EQUAL_INT(0, lib.slide_over);
+    TEST_ASSERT_FALSE(ui_library_tick(&lib, 25000));
+    (void)ui_library_input(&lib, UI_BTN_UP, 5);
+    (void)ui_library_tick(&lib, 30000);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_FALSE(ui_library_tick(&lib, 30000 + UI_SLIDE_WAIT_MS - 1));
+    TEST_ASSERT_TRUE(ui_library_tick(&lib, 30000 + UI_SLIDE_WAIT_MS));
+
+    /* In the sections, the list stands still. */
+    (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
+    (void)ui_library_tick(&lib, 40000);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_FALSE(ui_library_tick(&lib, 40000 + UI_SLIDE_WAIT_MS + 50));
+    TEST_ASSERT_EQUAL_INT(0, lib.slide_px);
+}
+
+/* The picture and details the caller found for the item shown: drawn at the top of the
+   details, in place of the item's name, facts and about, and only for that item. */
+static void test_art(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    ui_lib_section sec;
+    int item = -1;
+    TEST_ASSERT_TRUE(ui_library_shown_item(&lib, &sec, &item));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_GAMES, sec);
+    TEST_ASSERT_EQUAL_INT(0, item);
+
+    static uint32_t px[100 * 140];
+    for (size_t i = 0; i < sizeof px / sizeof px[0]; i++) {
+        px[i] = 0xFF102030U;
+    }
+    ui_lib_art art = {px, 100, 140, "The Real Title", "2004  |  PAL", "Made by someone."};
+    ui_library_set_art(&lib, UI_LIB_GAMES, 0, &art);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    int p = -1;
+    for (int i = 0; i < fake_log_n; i++) {
+        if (fake_log[i].kind == 'p') {
+            p = i;
+        }
+    }
+    TEST_ASSERT_TRUE(p >= 0);
+    TEST_ASSERT_EQUAL_INT(430 + (178 - 100) / 2, fake_log[p].r.x); /* centred in the details */
+    TEST_ASSERT_EQUAL_INT(90, fake_log[p].r.y);
+    TEST_ASSERT_EQUAL_INT(0x10, fake_log[p].c.r);
+    TEST_ASSERT_TRUE(fake_find_text("The Real Title") >= 0);
+    TEST_ASSERT_TRUE(fake_log[fake_find_text("The Real Title")].r.y >= 90 + UI_LIB_ART_H);
+    TEST_ASSERT_TRUE(fake_find_text("2004  |  PAL") >= 0);
+    TEST_ASSERT_TRUE(fake_saw("Made by someone."));
+    TEST_ASSERT_TRUE(fake_find_text("First game") >= 0); /* the list keeps its name */
+    TEST_ASSERT_FALSE(fake_saw("By someone. From the map."));
+
+    /* Another game highlighted: its own details, no picture. */
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    for (int i = 0; i < fake_log_n; i++) {
+        TEST_ASSERT_TRUE(fake_log[i].kind != 'p');
+    }
+    TEST_ASSERT_FALSE(fake_saw("The Real Title"));
+    /* The same index in INSTALLED isn't GAMES' game. */
+    ui_library_set_installed(&lib, found, 2);
+    (void)ui_library_input(&lib, UI_BTN_UP, 5);
+    (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    TEST_ASSERT_TRUE(ui_library_shown_item(&lib, &sec, &item));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALLED_GAMES, sec);
+    TEST_ASSERT_EQUAL_INT(0, item);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_FALSE(fake_saw("The Real Title"));
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5); /* to SETTINGS: nothing shown */
+    TEST_ASSERT_FALSE(ui_library_shown_item(&lib, &sec, &item));
+}
+
+/* Details too long for the panel: White and Black move them a line at a time, within range,
+   and the footer says so; another item starts at the top again. */
+static void test_detail_scroll(void)
+{
+    static char about[1200];
+    about[0] = '\0';
+    for (int i = 0; i < 40; i++) {
+        char w[16];
+        (void)snprintf(w, sizeof w, "line%02d ", i); /* 7 code points: two to a 154 px line */
+        strcat(about, w);
+    }
+    ui_lib_item two[2] = {{"Game", "", about, UI_LIB_NOT_TRIED, NULL, false},
+                          {"Other", "", "Short.", UI_LIB_NOT_TRIED, NULL, false}};
+    int sh[2];
+    ui_library lib;
+    ui_library_open(&lib, two, 2, sh);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(lib.detail_lines > lib.detail_fit);
+    TEST_ASSERT_TRUE(fake_saw("White Black more"));
+    TEST_ASSERT_TRUE(fake_saw("line00"));
+    (void)ui_library_input(&lib, UI_BTN_WHITE, 5); /* already at the top */
+    TEST_ASSERT_EQUAL_INT(0, lib.detail_scroll);
+    (void)ui_library_input(&lib, UI_BTN_BLACK, 5);
+    (void)ui_library_input(&lib, UI_BTN_BLACK, 5);
+    TEST_ASSERT_EQUAL_INT(2, lib.detail_scroll);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("line00 line01") < 0);  /* measured, not drawn */
+    TEST_ASSERT_TRUE(fake_find_text("line04 line05") >= 0); /* the third line first */
+    for (int i = 0; i < 100; i++) {
+        (void)ui_library_input(&lib, UI_BTN_BLACK, 5);
+        fake_reset();
+        ui_library_draw(&fake_draw, &lib, 0, NULL);
+    }
+    TEST_ASSERT_EQUAL_INT(lib.detail_lines - lib.detail_fit, lib.detail_scroll); /* the end */
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("line38 line39") >= 0);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_EQUAL_INT(0, lib.detail_scroll);
+    TEST_ASSERT_FALSE(fake_saw("White Black more"));
+}
+
+/* The top panel: the console's address, the NAS's, and the drives' space; a search takes its
+   place. */
+static void test_top_panel(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("XBOX") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("-") >= 0);    /* no address given */
+    TEST_ASSERT_TRUE(fake_find_text("none") >= 0); /* no NAS */
+    TEST_ASSERT_TRUE(fake_find_text("space not read") >= 0);
+
+    ui_lib_top top = {"192.168.1.23", "192.168.1.50", false};
+    ui_library_set_top(&lib, &top);
+    const ui_lib_disk e = {"E:", 412000000000ULL, 931500000000ULL};
+    ui_library_set_disks(&lib, &e, 1);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    int x = fake_find_text("192.168.1.23");
+    int n = fake_find_text("192.168.1.50");
+    TEST_ASSERT_TRUE(x >= 0 && n >= 0);
+    TEST_ASSERT_TRUE(fake_log[x].r.x < fake_log[n].r.x); /* the console left, the NAS right */
+    TEST_ASSERT_EQUAL_INT(24 + (46 - 2 * 20) / 2, fake_log[x].r.y); /* two lines, centred */
+    TEST_ASSERT_TRUE(fake_find_text("412 GB free of 931 GB") >= 0);
+    int bars = 0;
+    for (int i = 0; i < fake_log_n; i++) {
+        if (fake_log[i].kind == 'f' && fake_log[i].r.h == 5 && fake_log[i].r.y < 80) {
+            bars++;
+        }
+    }
+    TEST_ASSERT_EQUAL_INT(2, bars); /* the track and what's used */
+
+    top.nas_off = true;
+    ui_library_set_top(&lib, &top);
+    const ui_lib_disk two[2] = {{"F:", 1210000000000ULL, 1840000000000ULL},
+                                {"E:", 3900000000ULL, 4800000000ULL}};
+    ui_library_set_disks(&lib, two, 2);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_saw("192.168.1.50 off")); /* cut in the fake's wide font */
+    TEST_ASSERT_TRUE(fake_find_text("1.21 TB free") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("3.90 GB free") >= 0);
+    TEST_ASSERT_FALSE(fake_saw("of 1.84 TB"));
+
+    /* A long address is cut, not drawn over the NAS's. */
+    top =
+        (ui_lib_top){"an address far too long to fit beside the other one", "192.168.1.50", false};
+    ui_library_set_top(&lib, &top);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    n = fake_find_text("192.168.1.50");
+    TEST_ASSERT_TRUE(n >= 0);
+    int label = -1; /* the NAS's label, left of its address */
+    for (int i = 0; i < fake_log_n; i++) {
+        if (fake_log[i].kind == 't' && strcmp(fake_log[i].text, "NAS") == 0) {
+            label = i;
+        }
+    }
+    TEST_ASSERT_TRUE(label >= 0);
+    for (int i = 0; i < fake_log_n; i++) {
+        if (fake_log[i].kind == 't' && fake_log[i].r.y == fake_log[n].r.y &&
+            fake_log[i].r.x < fake_log[label].r.x) {
+            int cps = 0; /* code points, FAKE_CP_W each */
+            for (const char *p = fake_log[i].text; *p != '\0'; p++) {
+                cps += ((unsigned char)*p & 0xC0U) != 0x80U;
+            }
+            TEST_ASSERT_TRUE(fake_log[i].r.x + cps * 10 <= fake_log[label].r.x - 16);
+        }
+    }
+}
+
+static int sign(int v)
+{
+    return v < 0 ? -1 : v > 0 ? 1 : 0;
+}
+
+/* Names in the order a list of games reads. */
+static void test_name_order(void)
+{
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("Halo 2", "Halo 10")));
+    TEST_ASSERT_EQUAL_INT(1, sign(ui_library_name_cmp("Halo 10", "Halo 2")));
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("halo", "Halo 2"))); /* shorter */
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("blinx", "Crash"))); /* case folded */
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("Fable", "fable"))); /* then bytes */
+    TEST_ASSERT_EQUAL_INT(0, ui_library_name_cmp("Fable", "Fable"));
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("007 Agent", "7 Days"))); /* 7 = 7 */
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("Disc 9", "Disc 10")));
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("Game 99999999999999999999", "Game a")));
+    TEST_ASSERT_EQUAL_INT(
+        1, sign(ui_library_name_cmp("Game 100000000000000000000", "Game 99999999999999999999")));
+    TEST_ASSERT_EQUAL_INT(-1, sign(ui_library_name_cmp("", "A")));
+    /* Every pair of different names is ordered one way only. */
+    const char *names[] = {"Halo", "halo", "Halo 2", "Halo 02", "Halo 10", "Halo: CE",
+                           "",     "0",    "00",     "a0",      "a00",     "\xC3\x89lan"};
+    int n = (int)(sizeof names / sizeof names[0]);
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            int c = sign(ui_library_name_cmp(names[i], names[j]));
+            TEST_ASSERT_EQUAL_INT(-sign(ui_library_name_cmp(names[j], names[i])), c);
+            TEST_ASSERT_EQUAL_INT(i == j ? 0 : c, c);
+            if (i != j) {
+                TEST_ASSERT_TRUE(c != 0);
+            }
+            for (int k = 0; k < n; k++) { /* transitive */
+                if (c < 0 && ui_library_name_cmp(names[j], names[k]) < 0) {
+                    TEST_ASSERT_TRUE(ui_library_name_cmp(names[i], names[k]) < 0);
+                }
+            }
+        }
+    }
+}
+
+/* The fills of the summary's drive bars drawn (5 pixels high, left of the list), their widths
+   in `w`; returns how many. */
 static int disk_bars(int *w, int max)
 {
     int n = 0;
     for (int i = 0; i < fake_log_n; i++) {
-        if (fake_log[i].kind == 'f' && fake_log[i].r.h == 5) {
+        if (fake_log[i].kind == 'f' && fake_log[i].r.h == 5 && fake_log[i].r.x < 210) {
             if (n < max) {
                 w[n] = fake_log[i].r.w;
             }
@@ -1119,6 +1397,11 @@ int main(void)
     RUN_TEST(test_unfinished);
     RUN_TEST(test_installed_section);
     RUN_TEST(test_installed_disks);
+    RUN_TEST(test_name_order);
+    RUN_TEST(test_long_name_slides);
+    RUN_TEST(test_top_panel);
+    RUN_TEST(test_art);
+    RUN_TEST(test_detail_scroll);
     RUN_TEST(test_dialog_over_backdrop);
     RUN_TEST(test_matches);
     RUN_TEST(test_search);

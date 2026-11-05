@@ -494,6 +494,30 @@ First run on the owner's console (0.10.0, 2026-11-01): scan, login, browse and i
 | 2 | Install a game, then delete it, then look again | The free space goes down after the install and back up after the delete |
 | 3 | On a console with F:, SETTINGS > install location > F:\Games, then INSTALLED | F: first, then E:, each with a bar, no sizes |
 
+## Art, order and the top panel (0.12.0)
+
+**On the PC** (done, 2026-11-05):
+
+- `test_picture`: PNG pixels exactly (alpha kept), baseline and progressive JPEG within JPEG's error, a 4000 × 4000 header and a 4 MiB+ file refused as limits, GIF refused, a cut-short PNG; XPR0 DXT1 (both modes), DXT3, DXT5, swizzled A8R8G8B8 (the bit order), X8R8G8B8, R5G6B5, A1R5G5B5, A4R4G4B4, linear A8R8G8B8 with its pitch, and refusals; the fixture XBE's title image (written by `tools/ui/xbe_title_image.py`, the app's own tool) decoded to its PNG within DXT1's error, and the same through a disc image's root (`xc_xdvdfs_find_root`, a window, the section); fitting (averages, alpha over the panel colour, enlarging at most `max_up`, the box's shape).
+- `test_xbe`: region, disc, version; `$$XTIMAGE` over `$$XSIMAGE`, sections past the file, too large or small, names out of bounds, section headers out of bounds or too many, a short certificate. `test_xdvdfs`: the root lookup (any case, not below the root, loops). `test_synopsis`: every field, entities, CDATA, markup, bad UTF-8, cutting at a code point, missing end tags, other roots refused. `test_art`: base names, the plans for a folder, an image among others and an image alone, regions.
+- `test_ui_library`: name order (numbers by value, a strict total order over awkward names), sliding (waits, steps, holds, restarts; stands still in the sections or when the line fits), the top panel (two lines, NAS off, two drives, a long address cut before the NAS's), art (centred above the heading, only for its item and section) and scrolling the details (White, Black, the footer's hint, back to the top on another item).
+- Fuzzing (ASan + UBSan replay binaries fed mutated seeds, the libFuzzer runtime isn't in this toolchain): `fuzz_xpr` 100,000 inputs, `fuzz_synopsis` 150,000, `fuzz_xbe` 100,000, `fuzz_picture` 80,000 after two findings in stb_image: a signed overflow in its JPEG IDCT (now built with `-fwrapv`) and a `memcpy` of nothing from a null pointer on an empty PNG `IDAT` (not reported in sanitizer builds). Both inputs are seeds now.
+- The layout was checked by recording the library's drawing with the fonts' real metrics and drawing it with the real fonts and background: the picture, a two-line title and three lines of details fit; one drive's line with its bar, and two drives', fit the top panel; a sliding name is cut at its row.
+- XBE: 2,449,408 bytes, kernel imports unchanged.
+
+**On the console** (to do):
+
+| Step | How | Pass |
+|---|---|---|
+| 1 | Open the library with a NAS in the map | Top panel: `XBOX` and the console's address, `NAS` and the NAS's; the drive's free space and bar |
+| 2 | GAMES | Alphabetical; a long name highlighted slides after about a second and comes back |
+| 3 | Rest on an extracted game folder with `_resources` | The footer says it's reading; the poster, the synopsis's title, "By … for …", genre; Black scrolls to the overview |
+| 4 | Rest on a `.iso` with nothing beside it | The title image from its `default.xbe`, its region and title ID; `install.log` says "picture from the XBE" |
+| 5 | Rest on a `.7z` with `<name>.jpg` beside it | That picture; no XBE details |
+| 6 | Move away and back | Shown at once, no reading |
+| 7 | INSTALLED | Each install's title image and details from its folder |
+| 8 | Turn the NAS off, restart the app | `NAS … off` in the top panel; resting on a game doesn't hang longer than the SMB timeout, and isn't retried for a minute |
+
 ## FATX probe (M2)
 
 No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/src/fatx.c` ([fatx-names.md](formats/fatx-names.md)) come from the console's own kernel, measured by `app/fatx-probe`.

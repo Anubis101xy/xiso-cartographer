@@ -38,6 +38,21 @@ The console copies the game to its own drive (E:\Games by default), then starts 
 7. Pick a game and install it. A progress screen shows the copy, then it reads every file back to check it. If the network drops, it resumes where it stopped next time you install the same game.
 8. Installed games: **A > PLAY** starts the game. In GAMES an installed game also offers INSTALL AGAIN; in INSTALLED, DELETE. INSTALLED's left-hand panel shows how much is free on the drive the games go to (`E: 412 GB free`, a bar of how full it is, `of 931 GB`), and on E: too if they go to F: or G:.
 
+### The library screen
+
+- **The top panel** shows the console's address (`XBOX 192.168.1.23`), the NAS of the highlighted game (`NAS 192.168.1.50`, or `off` in orange if its folders didn't list when the app started), and the free space on the drive games go to with a bar of how full it is.
+- **GAMES is in alphabetical order** (numbers by value: Halo 2 before Halo 10). A name too long for its line slides along after a moment so you can read the rest.
+- **Pictures and details.** Rest on a game for a moment and its details show a picture and what the game's own files say; the footer says it's reading while it asks the NAS. What's looked for, beside the game on the NAS:
+
+  | Where the game is | Picture | Details |
+  |---|---|---|
+  | An image or archive among others in the folder you added | `Halo (USA).jpg`, `.png` or `.tbn` next to `Halo (USA).iso` | The disc image's `default.xbe` (not an archive's) |
+  | An image or archive in a folder of its own (`Halo (USA)\Halo (USA).iso`) | The same, then that folder's `_resources\artwork\poster.jpg`, `default.tbn`, `cover.jpg`/`.png`, `folder.jpg`/`.png` | The same, and `_resources\default.xml` |
+  | An extracted game folder | Its `_resources\artwork\poster.jpg`, `default.tbn`, `cover.jpg`/`.png`, `folder.jpg`/`.png` | Its `default.xbe` and `_resources\default.xml` |
+
+  With no picture beside it, the title image inside the game's `default.xbe` is shown (the one dashboards show). `default.xbe` gives the real title, title ID, region (NTSC-U, NTSC-J, PAL) and disc number. `_resources\default.xml` is XBMC4Gamers' synopsis: the title, developer, publisher, genre, year, players, ESRB, rating and an overview. If you already use XBMC4Gamers artwork packs, copy each game's `_resources` folder next to its `default.xbe` (or next to its image, in the image's own folder) and they show up here. Pictures can be JPEG (including progressive) or PNG, up to 4 MB and 2048 pixels a side. **White** and **Black** scroll details too long for the panel.
+- INSTALLED shows the same for each install, from its folder on the console: its `default.xbe`, and `_resources` if it has one.
+
 ### Apps
 
 The install question has a second button: **AS AN APP** puts it in `E:\Apps` instead of the games folder. Anything in a NAS folder called `Apps`, `Applications`, `Homebrew`, `Emulators` or `Dashboards` goes to `E:\Apps` by default (its second button is **AS A GAME**), so keeping your apps in a folder with one of those names saves a press. Installed apps are listed in INSTALLED with the games, and PLAY starts them.
@@ -63,7 +78,8 @@ You can add more than one folder (or more than one NAS): repeat 2–5.
 | "This login may not open that folder or file" | The console's user can't read that share or folder: give it Read only in the share's permissions. |
 | "The NAS (SMB) refused or failed the request" | SMB2 or SMB3 is allowed (File Services > SMB > Advanced). The log has the NAS's own words. |
 | "The server stopped responding" | The NAS's disks were asleep (it waits 20 seconds for them) or the network dropped. Try again: the install resumes. |
-| The NAS is off | Its folder costs 3 seconds when the list loads, and its games can't be installed until it's back. |
+| The NAS is off | Its folder costs 3 seconds when the list loads, and its games can't be installed until it's back. The top panel says `off`. |
+| No picture for a game | The picture's name: `<image name>.jpg` beside the image (same name, without `.iso`), or in the game's own folder. It must be a JPEG or PNG (the file's content counts, not its name) of at most 4 MB. `E:\xcat\install.log` has a line for each game read, saying what was found. Archives' own `default.xbe` isn't read: put a picture beside them. |
 
 The console writes what happened to `E:\xcat\install.log`; FTP it off and send it with any report. It never contains the password or the hash.
 

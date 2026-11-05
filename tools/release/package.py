@@ -41,6 +41,8 @@ LICENSES = [
      "licenses\\libsmb2-source.txt", "third_party/libsmb2/LICENCE-LGPL-2.1.txt"),
     ("LZMA-SDK.txt", "LZMA SDK, 7z decoder (7z archives): public domain, Igor Pavlov",
      "third_party/lzma/7zC.txt"),
+    ("stb_image.txt", "stb_image (JPEG and PNG covers): public domain or MIT, Sean Barrett",
+     "third_party/stb/LICENSE"),
 ]
 
 # The fonts' OFL texts ship in fonts\ next to them, as the build copies them.

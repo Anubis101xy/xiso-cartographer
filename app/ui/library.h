@@ -159,6 +159,28 @@ typedef struct ui_lib_folder {
     const char *note; /* under it, small: how much is free; may be NULL */
 } ui_lib_folder;
 
+/* The highlighted game's picture and details, as the caller found them (docs/formats/art.md):
+   shown in its details in place of the item's. The strings and pixels are the caller's and
+   must last until the next ui_library_set_art. */
+#define UI_LIB_ART_W 154 /* the largest picture the details show; larger is cut */
+#define UI_LIB_ART_H 130
+typedef struct ui_lib_art {
+    const uint32_t *px; /* w x h opaque pixels (ui_draw.pixels), or NULL: no picture */
+    int w;
+    int h;
+    const char *title; /* the heading: the game's own title; NULL: the item's name */
+    const char *facts; /* NULL: the item's */
+    const char *about; /* NULL: the item's */
+} ui_lib_art;
+
+/* The panel at the top, right of the title: the console's and a NAS's address. The strings
+   are the caller's and must last until the next ui_library_set_top. */
+typedef struct ui_lib_top {
+    const char *xbox; /* "192.168.1.23", or what's wrong ("offline"); NULL: "-" */
+    const char *nas;  /* the NAS's address, or NULL if there's none */
+    bool nas_off;     /* its folders didn't list (it's off, or the login is refused) */
+} ui_lib_top;
+
 /* A drive INSTALLED shows the space of, as the caller describes it. */
 typedef struct ui_lib_disk {
     const char *name;     /* "E:" */
@@ -224,8 +246,27 @@ typedef struct ui_library {
     const ui_lib_item *installed; /* INSTALLED: the folders in install_dir */
     int installed_count;
     ui_list installed_list;
-    const ui_lib_disk *disks; /* INSTALLED's summary: the drives' space, the caller's */
+    const ui_lib_disk *disks; /* the drives' space, the caller's: the top, INSTALLED's summary */
     int disk_count;
+    ui_lib_top top;
+    const ui_lib_art *art; /* for art_section's item art_item, or NULL */
+    ui_lib_section art_section;
+    int art_item;
+    /* The details' text: how many lines it's moved up (White, Black), and how many there are
+       and fit, as last drawn. Back to 0 when another item is shown. */
+    int detail_scroll;
+    int detail_lines;
+    int detail_fit;
+    const ui_lib_item *detail_of;
+    /* The highlighted line that's too wide slides (ui_slide_offset): the time ui_library_tick
+       last gave, the list and line it's measured from, since when, how far it can go and how
+       far it was drawn. */
+    uint32_t now_ms;
+    const ui_list *slide_list;
+    int slide_cur;
+    uint32_t slide_since;
+    int slide_over;
+    int slide_px;
     ui_lib_section section;
     bool in_sections;     /* the D-pad moves between the sections, not the games */
     ui_lib_action asking; /* what the open dialog asks; UI_LIB_NONE: none is open */
@@ -251,8 +292,19 @@ bool ui_library_to_apps(const ui_library *lib);
 /* Gives INSTALLED its list (again, after an install), keeping its place where it can. */
 void ui_library_set_installed(ui_library *lib, const ui_lib_item *items, int count);
 
-/* Gives INSTALLED's summary the space on the drives (the install folder's first; the array
-   stays the caller's), shown in place of the game counts. 0 drives: the counts again. */
+/* The item whose details are shown: GAMES' highlighted game (an index into items) or
+   INSTALLED's (into installed). False in SETTINGS, or if the list is empty. */
+bool ui_library_shown_item(const ui_library *lib, ui_lib_section *section, int *item);
+
+/* Gives `section`'s item `item` its picture and details (NULL: none); they're shown while it's
+   the item ui_library_shown_item gives. */
+void ui_library_set_art(ui_library *lib, ui_lib_section section, int item, const ui_lib_art *art);
+
+/* What the panel at the top shows, besides the drives (ui_library_set_disks): copied. */
+void ui_library_set_top(ui_library *lib, const ui_lib_top *top);
+
+/* Gives the top and INSTALLED's summary the space on the drives (the install folder's first; the
+   array stays the caller's), shown in place of the game counts. 0 drives: the counts again. */
 void ui_library_set_disks(ui_library *lib, const ui_lib_disk *disks, int count);
 
 /* Says where games install, and which folders SETTINGS offers (the strings stay the caller's).
@@ -306,6 +358,11 @@ void ui_library_nas_page(ui_library *lib);
 /* Wipes the NAS password typed for UI_LIB_NAS_LOGIN, once the login has used it. */
 void ui_library_forget_nas_password(ui_library *lib);
 
+/* Orders names as a list of games reads: letters with case folded (a-z as A-Z), runs of digits
+   by their value ("Halo 2" before "Halo 10", "007" with "7"), other bytes by value. Equal so
+   far: the shorter first, then by bytes, so only equal strings compare 0. For qsort. */
+int ui_library_name_cmp(const char *a, const char *b);
+
 /* Gives GAMES a new list of games (after the map changed): every game listed, the search and
    the highlight cleared. `shown` has room for `count` ints. */
 void ui_library_set_items(ui_library *lib, const ui_lib_item *items, int count, int *shown);
@@ -325,6 +382,11 @@ void ui_library_tell(ui_library *lib, const char *title, const char *message);
 
 /* How many list lines the screen shows. */
 int ui_library_rows(const ui_draw *d);
+
+/* Gives the library the time (milliseconds, any start; it may wrap). True if the screen should
+   be drawn again because the highlighted line, too wide for its row, has slid since it was
+   last drawn. Call it once a frame, before drawing. */
+bool ui_library_tick(ui_library *lib, uint32_t now_ms);
 
 /* One button press. In a list, the D-pad, LT and RT move (ui_list_input), Left goes to the
    sections, A in GAMES asks to install the highlighted game, B in a searched GAMES lists every

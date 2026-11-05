@@ -110,6 +110,9 @@ xcat_add_test(test_map_edit)
 xcat_add_test(test_json)
 xcat_add_test(test_archiveorg)
 xcat_add_test(test_xbe)
+xcat_add_test(test_picture ARGS ${CMAKE_CURRENT_SOURCE_DIR}/data/art)
+xcat_add_test(test_synopsis)
+xcat_add_test(test_art)
 xcat_add_test(test_catalog)
 xcat_add_test(test_journal)
 xcat_add_test(test_install ARGS ${XCAT_FIXTURES_DIR})
@@ -276,6 +279,15 @@ xcat_add_fuzzer(fuzz_archiveorg SEEDS ${_archiveorg_seeds})
 # XBE seeds are committed: synthetic headers with placeholder titles.
 file(GLOB _xbe_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/xbe/*.seed)
 xcat_add_fuzzer(fuzz_xbe SEEDS ${_xbe_seeds})
+
+# Picture, XPR0 and synopsis seeds are committed: the fixtures of data/art (made by
+# tools/fixtures/art/make.py) and synthetic textures and synopses.
+file(GLOB _picture_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/picture/*.seed)
+xcat_add_fuzzer(fuzz_picture SEEDS ${_picture_seeds})
+file(GLOB _xpr_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/xpr/*.seed)
+xcat_add_fuzzer(fuzz_xpr SEEDS ${_xpr_seeds})
+file(GLOB _synopsis_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/synopsis/*.seed)
+xcat_add_fuzzer(fuzz_synopsis SEEDS ${_synopsis_seeds})
 
 # Install marker seeds are committed: synthetic markers with placeholder names.
 file(GLOB _installed_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/installed/*.seed)

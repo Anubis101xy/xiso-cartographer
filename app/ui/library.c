@@ -12,7 +12,7 @@
 static const char *const section_names[UI_LIB_SECTION_COUNT_] = {"GAMES", "INSTALLED", "SETTINGS"};
 
 /* The title-safe area (32, 24, 576 x 432), as docs/ui-style.md#layout. */
-static const ui_rect tab = {32, 24, 240, 46};
+static const ui_rect tab = {32, 24, 170, 46};
 static const ui_rect nav = {32, 80, 170, 196};
 static const ui_rect summary = {32, 284, 170, 116};
 static const ui_rect list = {210, 80, 212, 320};
@@ -22,8 +22,9 @@ static const ui_rect footer = {32, 408, 576, 48};
 /* The list's lines, inside its panel: 8 pixels in at the sides, PAD at the top and bottom. */
 static const ui_rect list_in = {218, 90, 196, 300};
 
-/* The search's panel, right of the title tab, while GAMES is searched. */
-static const ui_rect search_box = {280, 24, 328, 46};
+/* Right of the title tab: the addresses and the drives, or the search while GAMES is searched. */
+static const ui_rect top_box = {210, 24, 398, 46};
+static const ui_rect search_box = {210, 24, 398, 46};
 
 static char lower(char c)
 {
@@ -230,6 +231,58 @@ static bool has_word(const char *s, const char *w, size_t n)
     return false;
 }
 
+static bool digit(char c)
+{
+    return c >= '0' && c <= '9';
+}
+
+int ui_library_name_cmp(const char *a, const char *b)
+{
+    const char *p = a;
+    const char *q = b;
+    while (*p != '\0' && *q != '\0') {
+        if (digit(*p) && digit(*q)) {
+            /* By value: leading zeros skipped, then the longer run is larger, else by digits. */
+            while (*p == '0' && digit(p[1])) {
+                p++;
+            }
+            while (*q == '0' && digit(q[1])) {
+                q++;
+            }
+            size_t np = 0;
+            size_t nq = 0;
+            while (digit(p[np])) {
+                np++;
+            }
+            while (digit(q[nq])) {
+                nq++;
+            }
+            if (np != nq) {
+                return np < nq ? -1 : 1;
+            }
+            int c = memcmp(p, q, np);
+            if (c != 0) {
+                return c < 0 ? -1 : 1;
+            }
+            p += np;
+            q += nq;
+            continue;
+        }
+        unsigned char x = (unsigned char)lower(*p);
+        unsigned char y = (unsigned char)lower(*q);
+        if (x != y) {
+            return x < y ? -1 : 1;
+        }
+        p++;
+        q++;
+    }
+    if (*p != *q) {
+        return *p == '\0' ? -1 : 1;
+    }
+    int c = strcmp(a, b); /* the same once folded: settle it by bytes */
+    return c < 0 ? -1 : c > 0 ? 1 : 0;
+}
+
 bool ui_library_matches(const ui_lib_item *it, const char *query)
 {
     const char *p = query;
@@ -302,6 +355,11 @@ void ui_library_set_installed(ui_library *lib, const ui_lib_item *items, int cou
     }
 }
 
+void ui_library_set_top(ui_library *lib, const ui_lib_top *top)
+{
+    lib->top = top != NULL ? *top : (ui_lib_top){0};
+}
+
 void ui_library_set_disks(ui_library *lib, const ui_lib_disk *disks, int count)
 {
     lib->disks = disks;
@@ -309,6 +367,39 @@ void ui_library_set_disks(ui_library *lib, const ui_lib_disk *disks, int count)
 }
 
 /* The highlighted line of the section shown, or NULL. */
+bool ui_library_shown_item(const ui_library *lib, ui_lib_section *section, int *item)
+{
+    *section = lib->section;
+    if (lib->section == UI_LIB_GAMES && lib->list.count > 0) {
+        *item = ui_library_game(lib);
+        return true;
+    }
+    if (lib->section == UI_LIB_INSTALLED_GAMES && lib->installed_count > 0) {
+        *item = lib->installed_list.cur;
+        return true;
+    }
+    *item = -1;
+    return false;
+}
+
+void ui_library_set_art(ui_library *lib, ui_lib_section section, int item, const ui_lib_art *art)
+{
+    lib->art = art;
+    lib->art_section = section;
+    lib->art_item = item;
+}
+
+/* The art given for the item shown, or NULL. */
+static const ui_lib_art *shown_art(const ui_library *lib)
+{
+    ui_lib_section section;
+    int item = -1;
+    if (lib->art == NULL || !ui_library_shown_item(lib, &section, &item)) {
+        return NULL;
+    }
+    return section == lib->art_section && item == lib->art_item ? lib->art : NULL;
+}
+
 static const ui_lib_item *current(const ui_library *lib)
 {
     if (lib->section == UI_LIB_GAMES && lib->list.count > 0) {
@@ -688,6 +779,15 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
     if (lib->typing_for != UI_LIB_TYPING_NONE) {
         return typed(lib, ui_kbd_input(&lib->kbd, b), rows);
     }
+    if ((b == UI_BTN_WHITE || b == UI_BTN_BLACK) && lib->section != UI_LIB_SETTINGS) {
+        /* The details' text a line up or down; draw_detail keeps it in range. */
+        if (b == UI_BTN_WHITE && lib->detail_scroll > 0) {
+            lib->detail_scroll--;
+        } else if (b == UI_BTN_BLACK && lib->detail_lines > lib->detail_fit) {
+            lib->detail_scroll++;
+        }
+        return UI_LIB_NONE;
+    }
     if (b == UI_BTN_Y) {
         (void)snprintf(lib->typing, sizeof lib->typing, "%s", lib->query);
         open_kbd(lib, UI_LIB_TYPING_SEARCH);
@@ -804,6 +904,89 @@ static void draw_disks(const ui_draw *d, const ui_library *lib, int x, int y, in
     }
 }
 
+#define PAIR_GAP 6   /* between a label and its value */
+#define ITEM_GAP 16  /* between one pair and the next */
+#define TOP_BAR_W 48 /* a drive's bar when there are several */
+
+/* The width of "LABEL value" in the small font. */
+static int pair_width(const ui_draw *d, const char *label, const char *value)
+{
+    return d->text_width(d->ctx, UI_FONT_SMALL, label, strlen(label)) + PAIR_GAP +
+           d->text_width(d->ctx, UI_FONT_SMALL, value, strlen(value));
+}
+
+/* "LABEL value" in at most w pixels, the label dim; returns the width drawn. */
+static int draw_pair(const ui_draw *d, int x, int y, int w, const char *label, const char *value,
+                     ui_color c)
+{
+    int lw = ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, label);
+    if (lw + PAIR_GAP >= w) {
+        return lw;
+    }
+    return lw + PAIR_GAP +
+           ui_text_fit(d, UI_FONT_SMALL, x + lw + PAIR_GAP, y, w - lw - PAIR_GAP, c, value);
+}
+
+/* The top panel: the console's address left and the NAS's right, then each drive's free space
+   with a bar of how full it is (one drive: its size too, and the bar takes the rest). */
+static void draw_top(const ui_draw *d, const ui_library *lib)
+{
+    ui_panel(d, top_box, UI_CHAMFER, ui_col_panel, ui_col_border);
+    int sh = d->line_height(d->ctx, UI_FONT_SMALL);
+    int x = top_box.x + 16;
+    int right = top_box.x + top_box.w - 16;
+    int y = top_box.y + (top_box.h - 2 * sh) / 2;
+
+    const char *xbox = lib->top.xbox != NULL && lib->top.xbox[0] != '\0' ? lib->top.xbox : "-";
+    char nas[UI_LIB_NAS_ADDR_MAX + 8];
+    (void)snprintf(nas, sizeof nas, "%s%s", lib->top.nas != NULL ? lib->top.nas : "none",
+                   lib->top.nas != NULL && lib->top.nas_off ? " off" : "");
+    int xw = pair_width(d, "XBOX", xbox);
+    int nw = pair_width(d, "NAS", nas);
+    int room = right - x - ITEM_GAP;
+    if (xw + nw > room) { /* too long for both: each gets half, or what the other leaves */
+        int half = room / 2;
+        if (xw <= half) {
+            nw = room - xw;
+        } else if (nw <= half) {
+            xw = room - nw;
+        } else {
+            xw = half;
+            nw = room - half;
+        }
+    }
+    (void)draw_pair(d, x, y, xw, "XBOX", xbox, ui_col_text);
+    (void)draw_pair(d, right - nw, y, nw, "NAS", nas,
+                    lib->top.nas != NULL && lib->top.nas_off ? ui_col_accent : ui_col_text);
+
+    y += sh;
+    if (lib->disk_count == 0) {
+        (void)draw_pair(d, x, y, right - x, "DRIVE", "space not read", ui_col_dim);
+        return;
+    }
+    int cx = x;
+    for (int i = 0; i < lib->disk_count && cx < right; i++) {
+        const ui_lib_disk *k = &lib->disks[i];
+        char free_s[24];
+        char total_s[24];
+        char value[64];
+        ui_format_size(free_s, sizeof free_s, k->free_bytes);
+        if (lib->disk_count == 1 && k->total_bytes > 0U) {
+            ui_format_size(total_s, sizeof total_s, k->total_bytes);
+            (void)snprintf(value, sizeof value, "%s free of %s", free_s, total_s);
+        } else {
+            (void)snprintf(value, sizeof value, "%s free", free_s);
+        }
+        cx += draw_pair(d, cx, y, right - cx, k->name != NULL ? k->name : "", value, ui_col_text);
+        int bw = lib->disk_count == 1 ? right - cx - 12 : TOP_BAR_W;
+        if (k->total_bytes > 0U && bw >= 24 && cx + 8 + bw <= right) {
+            draw_disk_bar(d, cx + 8, y + (sh - DISK_BAR_H) / 2 + 1, bw, k);
+            cx += 8 + bw;
+        }
+        cx += ITEM_GAP;
+    }
+}
+
 static void draw_summary(const ui_draw *d, const ui_library *lib)
 {
     ui_panel(d, summary, UI_CHAMFER, ui_col_panel, ui_col_border);
@@ -839,22 +1022,66 @@ static void draw_summary(const ui_draw *d, const ui_library *lib)
     }
 }
 
-static void draw_detail(const ui_draw *d, const ui_lib_item *it)
+/* The about text from its line `skip` on, wrapped into r; returns how many lines it has in
+   all at r's width. */
+static int draw_about(const ui_draw *d, ui_rect r, int skip, const char *s)
+{
+    size_t n = strlen(s);
+    size_t at = 0;
+    int lines = 0;
+    size_t from = n;
+    while (at < n) {
+        if (lines == skip) {
+            from = at;
+        }
+        size_t next = 0;
+        (void)ui_wrap(d, UI_FONT_SMALL, s + at, n - at, r.w, &next);
+        at += next > 0 ? next : 1;
+        lines++;
+    }
+    if (from < n && r.h > 0) {
+        (void)ui_text_wrap(d, UI_FONT_SMALL, r, ui_col_dim, s + from);
+    }
+    return lines;
+}
+
+static void draw_detail(const ui_draw *d, ui_library *lib, const ui_lib_item *it)
 {
     ui_panel(d, detail, UI_CHAMFER, ui_col_panel, ui_col_border);
+    lib->detail_lines = 0;
+    lib->detail_fit = 0;
+    if (it != lib->detail_of) {
+        lib->detail_of = it;
+        lib->detail_scroll = 0;
+    }
     if (it == NULL) {
         return;
     }
+    const ui_lib_art *art = shown_art(lib);
     int x = detail.x + PAD + 4;
     int w = detail.w - 2 * PAD - 4;
     int y = detail.y + PAD;
     int bottom = detail.y + detail.h - PAD;
+    if (art != NULL && art->px != NULL && art->w > 0 && art->h > 0) {
+        /* The picture, centred at the top, cut to the largest it may be. */
+        int pw = art->w < UI_LIB_ART_W ? art->w : UI_LIB_ART_W;
+        int ph = art->h < UI_LIB_ART_H ? art->h : UI_LIB_ART_H;
+        ui_rect box = {detail.x + (detail.w - pw) / 2, y, pw, ph};
+        d->clip(d->ctx, &box);
+        d->pixels(d->ctx, art->px, art->w, art->h, box.x, box.y);
+        d->clip(d->ctx, NULL);
+        y += ph + 8;
+    }
+    const char *name =
+        art != NULL && art->title != NULL && art->title[0] != '\0' ? art->title : it->name;
+    const char *facts = art != NULL && art->facts != NULL ? art->facts : it->facts;
+    const char *about = art != NULL && art->about != NULL ? art->about : it->about;
     /* The name on up to two lines. */
     int bh = d->line_height(d->ctx, UI_FONT_BOLD);
-    y += ui_text_wrap(d, UI_FONT_BOLD, (ui_rect){x, y, w, 2 * bh}, ui_col_accent, it->name) * bh;
+    y += ui_text_wrap(d, UI_FONT_BOLD, (ui_rect){x, y, w, 2 * bh}, ui_col_accent, name) * bh;
     int sh = d->line_height(d->ctx, UI_FONT_SMALL);
-    if (it->facts != NULL && it->facts[0] != '\0') {
-        (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, it->facts);
+    if (facts != NULL && facts[0] != '\0') {
+        (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, facts);
         y += sh;
     }
     y += 6;
@@ -872,8 +1099,16 @@ static void draw_detail(const ui_draw *d, const ui_lib_item *it)
         }
         y += 6;
     }
-    if (it->about != NULL && y < bottom) {
-        (void)ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, bottom - y}, ui_col_dim, it->about);
+    if (about != NULL && y < bottom) {
+        /* White and Black move it a line at a time when it doesn't all fit. */
+        lib->detail_fit = sh > 0 ? (bottom - y) / sh : 0;
+        int total = draw_about(d, (ui_rect){x, y, w, 0}, 0, about);
+        int most = total > lib->detail_fit ? total - lib->detail_fit : 0;
+        if (lib->detail_scroll > most) {
+            lib->detail_scroll = most;
+        }
+        lib->detail_lines =
+            draw_about(d, (ui_rect){x, y, w, bottom - y}, lib->detail_scroll, about);
     }
 }
 
@@ -1166,8 +1401,33 @@ static void draw_logins(const ui_draw *d, const ui_library *lib)
 
 /* The list of the section shown. In the sections, the D-pad moves between them, so its
    highlight is drawn dim. */
+bool ui_library_tick(ui_library *lib, uint32_t now_ms)
+{
+    lib->now_ms = now_ms;
+    return lib->slide_over > 0 &&
+           ui_slide_offset(now_ms - lib->slide_since, lib->slide_over) != lib->slide_px;
+}
+
+/* The list in the list panel, its highlighted line sliding if it's too wide and the buttons
+   move it. */
+static void draw_lines(const ui_draw *d, ui_library *lib, const ui_list *l, ui_list_line *line,
+                       void *ctx)
+{
+    bool still =
+        lib->in_sections || lib->asking != UI_LIB_NONE || lib->typing_for != UI_LIB_TYPING_NONE;
+    if (l != lib->slide_list || l->cur != lib->slide_cur || still) {
+        lib->slide_list = still ? NULL : l;
+        lib->slide_cur = l->cur;
+        lib->slide_since = lib->now_ms;
+    }
+    lib->slide_over = still ? 0 : ui_list_overflow(d, l, list_in, line, ctx);
+    lib->slide_px = ui_slide_offset(lib->now_ms - lib->slide_since, lib->slide_over);
+    ui_list_draw_slid(d, l, list_in, line, ctx, lib->in_sections, lib->slide_px);
+}
+
 static void draw_list(const ui_draw *d, ui_library *lib)
 {
+    lib->slide_over = 0; /* a list drawn below sets it */
     ui_panel(d, list, UI_CHAMFER, ui_col_panel, ui_col_border);
     if (lib->section == UI_LIB_INSTALLED_GAMES) {
         if (lib->installed_count == 0) {
@@ -1175,28 +1435,28 @@ static void draw_list(const ui_draw *d, ui_library *lib)
                                "Nothing installed yet. Games go to the install location in "
                                "SETTINGS.");
         } else {
-            ui_list_draw(d, &lib->installed_list, list_in, installed_name, lib, lib->in_sections);
+            draw_lines(d, lib, &lib->installed_list, installed_name, lib);
         }
         return;
     }
     if (lib->section == UI_LIB_SETTINGS) {
         if (lib->page == UI_LIB_PAGE_FOLDERS) {
-            ui_list_draw(d, &lib->folder_list, list_in, folder_name, lib, lib->in_sections);
+            draw_lines(d, lib, &lib->folder_list, folder_name, lib);
         } else if (lib->page == UI_LIB_PAGE_LOGINS) {
-            ui_list_draw(d, &lib->host_list, list_in, host_name, lib, lib->in_sections);
+            draw_lines(d, lib, &lib->host_list, host_name, lib);
         } else if (lib->page == UI_LIB_PAGE_SOURCES) {
-            ui_list_draw(d, &lib->source_list, list_in, source_name, lib, lib->in_sections);
+            draw_lines(d, lib, &lib->source_list, source_name, lib);
         } else if (lib->page == UI_LIB_PAGE_NAS) {
-            ui_list_draw(d, &lib->nas_list, list_in, nas_name, lib, lib->in_sections);
+            draw_lines(d, lib, &lib->nas_list, nas_name, lib);
         } else if (lib->page == UI_LIB_PAGE_BROWSE) {
             if (lib->browse_list.count == 0) {
                 (void)ui_text_wrap(d, UI_FONT_BODY, list_in, ui_col_dim,
                                    "Nothing here this login can open. B goes back.");
             } else {
-                ui_list_draw(d, &lib->browse_list, list_in, browse_name, lib, lib->in_sections);
+                draw_lines(d, lib, &lib->browse_list, browse_name, lib);
             }
         } else {
-            ui_list_draw(d, &lib->settings_list, list_in, setting_name, NULL, lib->in_sections);
+            draw_lines(d, lib, &lib->settings_list, setting_name, NULL);
         }
         return;
     }
@@ -1214,7 +1474,7 @@ static void draw_list(const ui_draw *d, ui_library *lib)
         (void)ui_text_wrap(d, UI_FONT_BODY, list_in, ui_col_dim, line);
         return;
     }
-    ui_list_draw(d, &lib->list, list_in, item_name, lib, lib->in_sections);
+    draw_lines(d, lib, &lib->list, item_name, lib);
 }
 
 /* While GAMES is searched: what for, and how many games match. */
@@ -1298,8 +1558,8 @@ static const char *hints(const ui_library *lib)
 static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *status)
 {
     bool searched = lib->query[0] != '\0';
-    const ui_rect panels[] = {tab, nav, summary, list, detail, footer, search_box};
-    ui_background_under(d, pan, panels, (int)(sizeof panels / sizeof panels[0]) - !searched);
+    const ui_rect panels[] = {tab, nav, summary, list, detail, footer, top_box};
+    ui_background_under(d, pan, panels, (int)(sizeof panels / sizeof panels[0]));
 
     ui_panel(d, tab, UI_CHAMFER, ui_col_panel, ui_col_border);
     int th = d->line_height(d->ctx, UI_FONT_TITLE);
@@ -1308,6 +1568,8 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
 
     if (searched) {
         draw_search(d, lib);
+    } else {
+        draw_top(d, lib);
     }
     draw_sections(d, lib);
     draw_summary(d, lib);
@@ -1328,7 +1590,7 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
             draw_logins(d, lib);
         }
     } else {
-        draw_detail(d, current(lib));
+        draw_detail(d, lib, current(lib));
     }
 
     ui_panel(d, footer, 0, ui_col_panel, ui_col_border);
@@ -1337,8 +1599,12 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
     if (status != NULL) {
         (void)ui_text_fit(d, UI_FONT_SMALL, footer.x + 12, by, footer.w - 24, ui_col_text, status);
     }
-    (void)ui_text_fit(d, UI_FONT_SMALL, footer.x + 12, by + sh, footer.w - 24, ui_col_dim,
-                      hints(lib));
+    char hint[160];
+    (void)snprintf(hint, sizeof hint, "%s%s", hints(lib),
+                   lib->section != UI_LIB_SETTINGS && lib->detail_lines > lib->detail_fit
+                       ? "  White Black more"
+                       : "");
+    (void)ui_text_fit(d, UI_FONT_SMALL, footer.x + 12, by + sh, footer.w - 24, ui_col_dim, hint);
 }
 
 const char *ui_library_screen(const ui_library *lib)

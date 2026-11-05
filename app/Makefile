@@ -57,6 +57,9 @@ include $(CURDIR)/tls.mk
 include $(CURDIR)/zip.mk
 include $(CURDIR)/sevenz.mk
 
+# A game's picture and details (ADR 0019): its cover, title image and synopsis.
+include $(CURDIR)/art.mk
+
 # NAS shared folders over SMB (ADR 0018): libsmb2, the SMB client and the NAS scan.
 include $(CURDIR)/smb.mk
 

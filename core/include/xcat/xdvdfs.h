@@ -77,6 +77,15 @@ xc_err xc_xdvdfs_open(const xc_source *src, xc_xdvdfs_volume *out);
 xc_err xc_xdvdfs_list(const xc_source *src, const xc_xdvdfs_volume *vol,
                       const xc_xdvdfs_limits *limits, xc_xdvdfs_listing *out);
 
+/*
+ * §10: finds `name` (any case of a-z) among the entries of the root directory only, reading
+ * just its table: for a game's default.xbe, without listing the whole image. On success
+ * *found says whether it's there and `out` (path NULL) gives it. XC_ERR_CORRUPT for a root
+ * table that breaks §3's rules on the way (a loop, an entry outside it); XC_ERR_NOMEM.
+ */
+xc_err xc_xdvdfs_find_root(const xc_source *src, const xc_xdvdfs_volume *vol, const char *name,
+                           xc_xdvdfs_entry *out, bool *found);
+
 /* Frees everything in a listing and zeroes it. Safe on a zeroed listing. */
 void xc_xdvdfs_listing_free(xc_xdvdfs_listing *listing);
 

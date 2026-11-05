@@ -47,6 +47,7 @@
 #include "script.h"
 #include "startup_view.h"
 #include "theme.h"
+#include "xcat/art.h"
 #include "xcat/catalog.h"
 #include "xcat/credentials.h"
 #include "xcat/http_client.h"
@@ -56,13 +57,17 @@
 #include "xcat/map.h"
 #include "xcat/map_edit.h"
 #include "xcat/nxdk.h"
+#include "xcat/picture.h"
 #include "xcat/settings.h"
 #include "xcat/sevenz.h"
 #include "xcat/smb.h"
 #include "xcat/smb_client.h"
 #include "xcat/smb_scan.h"
+#include "xcat/synopsis.h"
 #include "xcat/ui_script.h"
 #include "xcat/version.h"
+#include "xcat/xbe.h"
+#include "xcat/xdvdfs.h"
 #include "xcat/zip.h"
 
 #define XCAT_DIR "E:\\xcat"
@@ -381,6 +386,7 @@ static bool net_tried;
 static bool net_up;
 /* Where the console is on the network, for the NAS pages ("" until the network is tried). */
 static char console_line[96];
+static char console_ip[32]; /* the top panel's: the console's address, "offline", or "" */
 static xc_http_config http_cfg;
 static bool https_tried;                      /* TLS was set up, or tried (https_ready) */
 static xc_err https_err = XC_ERR_UNSUPPORTED; /* why there is no TLS, if there isn't */
@@ -499,10 +505,12 @@ static bool network(void)
         out("No network: check the cable and the dashboard's network settings.\n");
         snprintf(console_line, sizeof console_line, "%s",
                  "This Xbox isn't on the network: check the cable.");
+        snprintf(console_ip, sizeof console_ip, "%s", "offline");
         return false;
     }
     out("Console IP %s\n", ip);
     snprintf(console_line, sizeof console_line, "This Xbox: %s", ip);
+    snprintf(console_ip, sizeof console_ip, "%s", ip);
     xc_nx_net(&net);
     memset(&http_cfg, 0, sizeof http_cfg);
     http_cfg.net = &net;
@@ -632,10 +640,35 @@ static xc_err map_fetch(void *ctx, const char *location, bool is_url, size_t max
 
 /* xc_map_smb_list_fn: an @smb folder's images, with the login the credentials file gives its
    NAS (smb.md §3, §4). */
+/* The NASes the map's @smb folders are on, in the map's order, and whether any of a NAS's
+   folders listed: the top panel's. Emptied each time the map loads. */
+#define MAX_SMB_SEEN 8
+static struct {
+    char host[XC_SMB_MAX_HOST + 1];
+    bool listed;
+} smb_seen[MAX_SMB_SEEN];
+static int smb_seen_n;
+
+static void saw_nas(const char *host, bool listed)
+{
+    for (int i = 0; i < smb_seen_n; i++) {
+        if (strcmp(smb_seen[i].host, host) == 0) {
+            smb_seen[i].listed = smb_seen[i].listed || listed;
+            return;
+        }
+    }
+    if (smb_seen_n < MAX_SMB_SEEN) {
+        snprintf(smb_seen[smb_seen_n].host, sizeof smb_seen[smb_seen_n].host, "%s", host);
+        smb_seen[smb_seen_n].listed = listed;
+        smb_seen_n++;
+    }
+}
+
 static xc_err map_list_smb(void *ctx, const xc_smb_url *folder, xc_smb_listing *listing)
 {
     (void)ctx;
     if (!network()) {
+        saw_nas(folder->host, false);
         return XC_ERR_NET_CONNECT;
     }
     say("Listing a folder on the NAS...\n");
@@ -649,6 +682,7 @@ static xc_err map_list_smb(void *ctx, const xc_smb_url *folder, xc_smb_listing *
         }
         xc_smb_disconnect(c);
     }
+    saw_nas(folder->host, err == XC_OK);
     if (err != XC_OK) {
         out("  NAS %s, share %s: %s (%s)\n", folder->host, folder->share, xc_err_str(err), detail);
     } else {
@@ -661,6 +695,7 @@ static xc_err map_list_smb(void *ctx, const xc_smb_url *folder, xc_smb_listing *
 static bool load_map(xc_map *map)
 {
     memset(map, 0, sizeof *map);
+    smb_seen_n = 0;
     if (!xc_nx_exists(MAP_FILE)) {
         return false;
     }
@@ -1839,6 +1874,7 @@ typedef struct game {
     char note[400];                      /* what the last install attempt in this run came to */
     char installed[XC_INSTALL_MAX_PATH]; /* its folder, if it's installed; "" if not */
     char partial[XC_INSTALL_MAX_PATH];   /* the folder of an install that isn't finished, or "" */
+    char nas[XC_SMB_MAX_HOST + 1];       /* the NAS it's on, or "" */
     uint64_t size;                       /* from the listing; 0 if unknown */
     const xc_map_entry *entry;           /* a map entry, or */
     const char *path;                    /* a file in E:\xcat\isos */
@@ -1858,12 +1894,13 @@ static size_t find_release(const xc_map_entry *e, const char *name)
     return xc_catalog_find_name(&cat, name);
 }
 
-/* Appends `part` to s (of `size`), after " | " if s isn't empty; nothing if part is empty. */
+/* Appends `part` to s (of `size`), after " · " if s isn't empty; nothing if part is empty.
+   (A middle dot, not a bar: "2005 · PAL · 4.03 GB" fits the details' width.) */
 static void join(char *s, size_t size, const char *part)
 {
     size_t n = strlen(s);
     if (part[0] != '\0' && n < size) {
-        (void)snprintf(s + n, size - n, "%s%s", n > 0 ? "  |  " : "", part);
+        (void)snprintf(s + n, size - n, "%s%s", n > 0 ? " \xC2\xB7 " : "", part);
     }
 }
 
@@ -1953,7 +1990,27 @@ static void describe(game *g)
     snprintf(g->about + n, sizeof g->about - n, "%s", from);
 }
 
-/* One game per map entry and local file, in that order. */
+static int by_name(const void *a, const void *b)
+{
+    const game *x = a;
+    const game *y = b;
+    int c = ui_library_name_cmp(x->name, y->name);
+    if (c != 0) {
+        return c;
+    }
+    /* The same name twice (on two NASes, say): map entries in map order, then local files. */
+    const char *sx = x->entry != NULL ? x->entry->url : x->path;
+    const char *sy = y->entry != NULL ? y->entry->url : y->path;
+    if ((x->entry == NULL) != (y->entry == NULL)) {
+        return x->entry == NULL ? 1 : -1;
+    }
+    if (x->entry != NULL) {
+        return x->entry < y->entry ? -1 : x->entry > y->entry ? 1 : 0;
+    }
+    return strcmp(sx, sy);
+}
+
+/* One game per map entry and local file, by name (ui_library_name_cmp). */
 static game *list_games(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlocal, int *count)
 {
     size_t n = map->entry_count + (size_t)nlocal;
@@ -1974,6 +2031,10 @@ static game *list_games(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlo
             snprintf(g->key, sizeof g->key, "%08lX%s%s", (unsigned long)e->title_id,
                      e->variant[0] != '\0' ? "@" : "", e->variant);
         }
+        xc_smb_url u;
+        if (xc_smb_is_url(e->url) && xc_smb_url_parse(e->url, strlen(e->url), &u) == XC_OK) {
+            snprintf(g->nas, sizeof g->nas, "%s", u.host);
+        }
         describe(g);
     }
     for (int i = 0; i < nlocal; i++) {
@@ -1982,6 +2043,7 @@ static game *list_games(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlo
         g->path = local[i];
         describe(g);
     }
+    qsort(games, n, sizeof *games, by_name);
     *count = (int)n;
     return games;
 }
@@ -2005,15 +2067,10 @@ static ui_lib_item found_items[MAX_FOUND];
 
 static int by_folder(const void *a, const void *b)
 {
-    const char *x = ((const found *)a)->folder;
-    const char *y = ((const found *)b)->folder;
-    for (;; x++, y++) {
-        int cx = *x >= 'A' && *x <= 'Z' ? *x - 'A' + 'a' : (unsigned char)*x;
-        int cy = *y >= 'A' && *y <= 'Z' ? *y - 'A' + 'a' : (unsigned char)*y;
-        if (cx != cy || cx == 0) {
-            return cx - cy;
-        }
-    }
+    const found *x = a;
+    const found *y = b;
+    int c = ui_library_name_cmp(x->folder, y->folder);
+    return c != 0 ? c : strcmp(x->root, y->root);
 }
 
 /* Where an image came from, for the details: a server's name, or the file's path. */
@@ -3417,6 +3474,445 @@ static bool nas_use(int pick, char *done, size_t done_size, char *msg, size_t si
     return true;
 }
 
+/* --- a game's picture and details (docs/formats/art.md, ADR 0019) ------------------------ */
+
+#define ART_SLOTS 12        /* games whose art is kept, the least recently shown dropped */
+#define ART_SETTLE_MS 350U  /* the highlight rests this long before art is read for it */
+#define ART_RETRY_MS 60000U /* a NAS that didn't answer is asked again after this */
+#define ART_KEY_MAX (XC_INSTALL_MAX_PATH + 16)
+
+/* Where a game's files are: a folder on a NAS share or on the console, and the image's name. */
+typedef struct art_where {
+    bool smb;
+    xc_smb_url url;                  /* smb: the share, and the folder in url.path */
+    char dir[XC_NX_PATH_MAX];        /* on the console: the folder */
+    char image[XC_SMB_MAX_NAME + 1]; /* the image's or archive's file name; "" for a folder */
+    bool own_folder;                 /* art.md §2: the folder holds just this game */
+} art_where;
+
+typedef struct art_slot {
+    char key[ART_KEY_MAX]; /* the game's URL or path; "" if the slot is free */
+    uint32_t used;         /* art_clock when last shown */
+    bool failed;           /* the NAS didn't answer: asked again after ART_RETRY_MS */
+    uint32_t failed_at;
+    xc_picture pic; /* fitted to the details, opaque; empty if there's none */
+    char title[XC_XBE_TITLE_UNITS * 3 + 128];
+    char facts[128];
+    char about[1800];
+    ui_lib_art art;
+} art_slot;
+
+static art_slot art_slots[ART_SLOTS];
+static uint32_t art_clock;
+static char art_shown[ART_KEY_MAX]; /* the key of what the details show, and since when */
+static uint32_t art_since;
+static xc_synopsis art_syn; /* one load at a time */
+
+/* art.md §2: an @smb folder of the map is that folder (so an image in it isn't alone there). */
+static bool listed_folder(const xc_smb_url *dir)
+{
+    for (size_t i = 0; i < map.smb_folder_count; i++) {
+        xc_smb_url f;
+        const char *u = map.smb_folders[i];
+        if (xc_smb_url_parse(u, strlen(u), &f) == XC_OK && same_ci(f.host, dir->host) &&
+            f.port == dir->port && same_ci(f.share, dir->share) && same_ci(f.path, dir->path)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Where GAMES' game g is, and its key; false if its art isn't looked for (an HTTP source). */
+static bool art_where_game(const game *g, art_where *w, char *key, size_t key_size)
+{
+    memset(w, 0, sizeof *w);
+    if (g->entry != NULL) {
+        const char *url = g->entry->url;
+        size_t n = strlen(url);
+        if (!xc_smb_is_url(url) || xc_smb_url_parse(url, n, &w->url) != XC_OK) {
+            return false;
+        }
+        w->smb = true;
+        snprintf(key, key_size, "%s", url);
+        if (n > 0 && url[n - 1U] == '/') {
+            return true; /* a game folder: url.path is it */
+        }
+        char *slash = strrchr(w->url.path, '/');
+        snprintf(w->image, sizeof w->image, "%s", slash != NULL ? slash + 1 : w->url.path);
+        if (slash != NULL) {
+            *slash = '\0';
+        } else {
+            w->url.path[0] = '\0';
+        }
+        w->own_folder = !listed_folder(&w->url);
+        return true;
+    }
+    if (g->path == NULL) {
+        return false;
+    }
+    const char *slash = strrchr(g->path, '\\');
+    if (slash == NULL) {
+        return false;
+    }
+    snprintf(w->dir, sizeof w->dir, "%.*s", (int)(slash - g->path), g->path);
+    snprintf(w->image, sizeof w->image, "%s", slash + 1);
+    snprintf(key, key_size, "%s", g->path);
+    return true;
+}
+
+/* Where INSTALLED's install f is: a game folder on the console. */
+static bool art_where_found(const found *f, art_where *w, char *key, size_t key_size)
+{
+    memset(w, 0, sizeof *w);
+    int n = snprintf(w->dir, sizeof w->dir, "%s\\%s", f->root, f->folder);
+    if (n < 0 || (size_t)n >= sizeof w->dir) {
+        return false;
+    }
+    snprintf(key, key_size, "installed:%s", w->dir);
+    return true;
+}
+
+/* Opens `rel` ('/'-separated, in w's folder) as a source; closed with art_close. */
+static xc_err art_open(const art_where *w, xc_smb_conn *c, const char *rel, xc_smb_file **sf,
+                       xc_nx_file *lf, xc_source *src)
+{
+    char path[XC_SMB_MAX_PATH + XC_ART_MAX_PATH + 2];
+    int n = w->smb ? snprintf(path, sizeof path, "%s%s%s", w->url.path,
+                              w->url.path[0] != '\0' ? "/" : "", rel)
+                   : snprintf(path, sizeof path, "%s\\%s", w->dir, rel);
+    if (n < 0 || (size_t)n >= sizeof path) {
+        return XC_ERR_LIMIT;
+    }
+    if (w->smb) {
+        return xc_smb_open(c, path, sf, src);
+    }
+    for (char *p = path + strlen(w->dir); *p != '\0'; p++) {
+        if (*p == '/') {
+            *p = '\\';
+        }
+    }
+    return xc_nx_file_open(src, lf, path);
+}
+
+static void art_close(xc_smb_file **sf, xc_nx_file *lf)
+{
+    xc_smb_close(*sf);
+    *sf = NULL;
+    xc_nx_file_close(lf);
+    lf->handle = NULL;
+}
+
+/* The whole of `rel`, if it's at most `max` bytes; freed by the caller. */
+static xc_err art_read(const art_where *w, xc_smb_conn *c, const char *rel, size_t max,
+                       uint8_t **data, size_t *len)
+{
+    xc_smb_file *sf = NULL;
+    xc_nx_file lf = {NULL};
+    xc_source src;
+    *data = NULL;
+    xc_err err = art_open(w, c, rel, &sf, &lf, &src);
+    if (err == XC_OK && (src.size == 0 || src.size > max)) {
+        err = XC_ERR_LIMIT;
+    }
+    if (err == XC_OK) {
+        *data = malloc((size_t)src.size);
+        err = *data != NULL ? xc_source_read(&src, 0, *data, (size_t)src.size) : XC_ERR_NOMEM;
+        *len = (size_t)src.size;
+    }
+    art_close(&sf, &lf);
+    if (err != XC_OK) {
+        free(*data);
+        *data = NULL;
+    }
+    return err;
+}
+
+/* art.md §3: the default.xbe beside, or in a disc image's root, into info; and its title image
+   into *pic if pic isn't NULL. */
+static bool art_xbe(const art_where *w, xc_smb_conn *c, const xc_art_plan *plan, xc_xbe_info *info,
+                    xc_picture *pic)
+{
+    xc_smb_file *sf = NULL;
+    xc_nx_file lf = {NULL};
+    xc_source src;
+    xc_source inside;
+    xc_window_source win;
+    const xc_source *xbe = NULL;
+    size_t n = strlen(w->image);
+    if (plan->xbe[0] != '\0') {
+        if (art_open(w, c, plan->xbe, &sf, &lf, &src) == XC_OK) {
+            xbe = &src;
+        }
+    } else if (ends_with_ci(w->image, n, ".iso") || ends_with_ci(w->image, n, ".xiso")) {
+        xc_xdvdfs_volume vol;
+        xc_xdvdfs_entry e;
+        bool found = false;
+        if (art_open(w, c, w->image, &sf, &lf, &src) == XC_OK &&
+            xc_xdvdfs_open(&src, &vol) == XC_OK &&
+            xc_xdvdfs_find_root(&src, &vol, "default.xbe", &e, &found) == XC_OK && found &&
+            (e.attributes & 0x10U) == 0 && e.offset <= src.size && src.size - e.offset >= e.size) {
+            xc_source_window(&inside, &win, &src, e.offset, e.size);
+            xbe = &inside;
+        }
+    }
+    bool ok = xbe != NULL && xc_xbe_read_info(xbe, info) == XC_OK;
+    if (ok && pic != NULL && info->image_size > 0) {
+        uint8_t *buf = malloc(info->image_size);
+        if (buf != NULL &&
+            xc_source_read(xbe, info->image_offset, buf, info->image_size) == XC_OK) {
+            (void)xc_picture_xpr(buf, info->image_size, pic);
+        }
+        free(buf);
+    }
+    art_close(&sf, &lf);
+    return ok;
+}
+
+/* Appends ". "-separated sentence parts to s (of `size`). */
+static void art_say(char *s, size_t size, const char *fmt, ...)
+{
+    size_t n = strlen(s);
+    if (n >= size) {
+        return;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    (void)vsnprintf(s + n, size - n, fmt, ap);
+    va_end(ap);
+}
+
+/* art.md §6: the details from the synopsis and the XBE, around what the item already says. */
+static void art_text(art_slot *s, const char *facts, const char *about, bool catalog,
+                     const xc_synopsis *syn, const xc_xbe_info *x)
+{
+    const char *title = syn != NULL && syn->title[0] != '\0' ? syn->title
+                        : x != NULL                          ? x->cert.title
+                                                             : "";
+    snprintf(s->title, sizeof s->title, "%s", title);
+    /* Facts: the year and region if the catalog didn't give them, then the item's. */
+    s->facts[0] = '\0';
+    if (!catalog && syn != NULL && syn->year[0] != '\0' && strstr(facts, syn->year) == NULL) {
+        join(s->facts, sizeof s->facts, syn->year);
+    }
+    const char *region = x != NULL && x->has_region ? xc_art_region(x->region) : "";
+    if (!catalog && region[0] != '\0') {
+        join(s->facts, sizeof s->facts, region);
+    }
+    join(s->facts, sizeof s->facts, facts);
+    /* About: who made it, what it is, the XBE's numbers, the item's text, then the overview. */
+    s->about[0] = '\0';
+    if (syn != NULL) {
+        if (syn->developer[0] != '\0' && syn->publisher[0] != '\0' &&
+            !same_ci(syn->developer, syn->publisher)) {
+            art_say(s->about, sizeof s->about, "By %s for %s. ", syn->developer, syn->publisher);
+        } else if (syn->developer[0] != '\0' || syn->publisher[0] != '\0') {
+            art_say(s->about, sizeof s->about, "By %s. ",
+                    syn->developer[0] != '\0' ? syn->developer : syn->publisher);
+        }
+        if (syn->genre[0] != '\0') {
+            art_say(s->about, sizeof s->about, "%s. ", syn->genre);
+        }
+        if (syn->features[0] != '\0') {
+            art_say(s->about, sizeof s->about, "%s. ", syn->features);
+        }
+        if (syn->online[0] != '\0') {
+            art_say(s->about, sizeof s->about, "Online: %s. ", syn->online);
+        }
+        if (syn->esrb[0] != '\0') {
+            art_say(s->about, sizeof s->about, "ESRB %s. ", syn->esrb);
+        }
+        if (syn->rating[0] != '\0') {
+            art_say(s->about, sizeof s->about, "Rated %s. ", syn->rating);
+        }
+    }
+    if (x != NULL) {
+        art_say(s->about, sizeof s->about, "Title ID %08lX", (unsigned long)x->cert.title_id);
+        if (x->has_region && x->disc > 0 && x->disc < 10) {
+            art_say(s->about, sizeof s->about, ", disc %lu", (unsigned long)x->disc + 1UL);
+        }
+        art_say(s->about, sizeof s->about, ". ");
+    }
+    art_say(s->about, sizeof s->about, "%s", about != NULL ? about : "");
+    if (syn != NULL && syn->overview[0] != '\0') {
+        art_say(s->about, sizeof s->about, "\n%s", syn->overview);
+    }
+    s->art =
+        (ui_lib_art){s->pic.px, (int)s->pic.w, (int)s->pic.h, s->title[0] != '\0' ? s->title : NULL,
+                     s->facts,  s->about};
+}
+
+/* The slot for `key`, or NULL. */
+static art_slot *art_find(const char *key)
+{
+    for (int i = 0; i < ART_SLOTS; i++) {
+        if (art_slots[i].key[0] != '\0' && strcmp(art_slots[i].key, key) == 0) {
+            return &art_slots[i];
+        }
+    }
+    return NULL;
+}
+
+/* A free slot, else the least recently shown, emptied. */
+static art_slot *art_take(void)
+{
+    art_slot *s = &art_slots[0];
+    for (int i = 0; i < ART_SLOTS; i++) {
+        if (art_slots[i].key[0] == '\0') {
+            s = &art_slots[i];
+            break;
+        }
+        if (art_slots[i].used < s->used) {
+            s = &art_slots[i];
+        }
+    }
+    xc_picture_free(&s->pic);
+    memset(s, 0, sizeof *s);
+    return s;
+}
+
+/* Reads a game's picture and details (art.md §2-§5) into a slot for `key`. */
+static art_slot *art_load(const char *key, const art_where *w, const char *facts, const char *about,
+                          bool catalog, uint32_t now)
+{
+    art_slot *s = art_find(key);
+    if (s != NULL) {
+        xc_picture_free(&s->pic);
+        memset(s, 0, sizeof *s);
+    } else {
+        s = art_take();
+    }
+    snprintf(s->key, sizeof s->key, "%s", key);
+    xc_smb_conn *c = NULL;
+    if (w->smb) {
+        char why_smb[XC_SMB_DETAIL_MAX];
+        xc_err err = network() ? xc_smb_connect_url(&w->url, have_creds ? &creds : NULL, &c,
+                                                    why_smb, sizeof why_smb)
+                               : XC_ERR_NET_CONNECT;
+        if (err != XC_OK) {
+            out("Details of %s: the NAS %s: %s\n", key, w->url.host, xc_err_str(err));
+            s->failed = true;
+            s->failed_at = now;
+            art_text(s, facts, about, catalog, NULL, NULL);
+            return s;
+        }
+    }
+    xc_art_plan plan;
+    xc_art_plan_for(w->image[0] != '\0' ? w->image : NULL, w->own_folder, &plan);
+    xc_picture pic = {NULL, 0, 0};
+    const char *cover = "";
+    for (size_t i = 0; i < plan.cover_count && pic.px == NULL; i++) {
+        uint8_t *data = NULL;
+        size_t len = 0;
+        if (art_read(w, c, plan.covers[i], XC_PICTURE_MAX_FILE, &data, &len) != XC_OK) {
+            continue;
+        }
+        xc_err err = xc_picture_decode(data, len, &pic);
+        free(data);
+        if (err == XC_OK) {
+            cover = plan.covers[i];
+        } else {
+            out("Details of %s: %s isn't a picture this app reads (%s)\n", key, plan.covers[i],
+                xc_err_str(err));
+        }
+    }
+    bool has_syn = false;
+    if (plan.synopsis[0] != '\0') {
+        uint8_t *data = NULL;
+        size_t len = 0;
+        if (art_read(w, c, plan.synopsis, XC_SYNOPSIS_MAX_FILE, &data, &len) == XC_OK) {
+            has_syn = xc_synopsis_parse((const char *)data, len, &art_syn) == XC_OK;
+        }
+        free(data);
+    }
+    xc_xbe_info info;
+    bool has_xbe = art_xbe(w, c, &plan, &info, pic.px == NULL ? &pic : NULL);
+    xc_smb_disconnect(c);
+    if (pic.px != NULL) {
+        uint32_t bg =
+            (uint32_t)ui_col_panel.r << 16U | (uint32_t)ui_col_panel.g << 8U | ui_col_panel.b;
+        (void)xc_picture_fit(&pic, UI_LIB_ART_W, UI_LIB_ART_H, 2, bg, &s->pic);
+    }
+    out("Details of %s: picture %s (%lux%lu), synopsis %s, XBE %s\n", key,
+        cover[0] != '\0' ? cover
+        : pic.px != NULL ? "from the XBE"
+                         : "none",
+        (unsigned long)pic.w, (unsigned long)pic.h, has_syn ? "yes" : "no", has_xbe ? "yes" : "no");
+    xc_picture_free(&pic);
+    art_text(s, facts, about, catalog, has_syn ? &art_syn : NULL, has_xbe ? &info : NULL);
+    return s;
+}
+
+/* Once a frame: gives the details the art of the item they show, reading it once the
+   highlight has rested there. True if the screen should be drawn again. */
+static bool art_frame(ui_library *lib, const game *games, int count, uint32_t now)
+{
+    ui_lib_section sec;
+    int item = -1;
+    char key[ART_KEY_MAX] = "";
+    art_where w;
+    bool have = ui_library_shown_item(lib, &sec, &item);
+    const char *facts = "";
+    const char *about = "";
+    bool catalog = false;
+    if (have && sec == UI_LIB_GAMES && item >= 0 && item < count) {
+        have = art_where_game(&games[item], &w, key, sizeof key);
+        facts = games[item].facts;
+        about = games[item].about;
+        catalog = games[item].release != XC_CATALOG_NONE;
+    } else if (have && sec == UI_LIB_INSTALLED_GAMES && item >= 0 && item < found_count) {
+        have = art_where_found(&founds[item], &w, key, sizeof key);
+        facts = founds[item].facts;
+        about = founds[item].about;
+        catalog = true; /* its facts are its own: size and files */
+    } else {
+        have = false;
+    }
+    if (!have) {
+        art_shown[0] = '\0';
+        return false;
+    }
+    if (strcmp(key, art_shown) != 0) {
+        snprintf(art_shown, sizeof art_shown, "%s", key);
+        art_since = now;
+    }
+    art_slot *s = art_find(key);
+    if (s == NULL || (s->failed && now - s->failed_at > ART_RETRY_MS)) {
+        if (now - art_since < ART_SETTLE_MS) {
+            return false; /* still moving */
+        }
+        if (w.smb) {
+            ui_sdl_begin(ui_col_bg);
+            ui_library_draw(&screen, lib, pan_now, "Reading the game's picture and details...");
+            ui_sdl_present();
+        }
+        s = art_load(key, &w, facts, about, catalog, now);
+    }
+    s->used = ++art_clock;
+    if (lib->art != &s->art || lib->art_section != sec || lib->art_item != item) {
+        ui_library_set_art(lib, sec, item, &s->art);
+        return true;
+    }
+    return false;
+}
+
+/* The top panel: the console's address, and the highlighted game's NAS in GAMES, else the
+   map's first, said to be off if none of its folders listed. */
+static void show_top(ui_library *lib, const game *games, int count)
+{
+    int g = lib->section == UI_LIB_GAMES ? ui_library_game(lib) : -1;
+    const char *nas = g >= 0 && g < count && games[g].nas[0] != '\0' ? games[g].nas
+                      : smb_seen_n > 0                               ? smb_seen[0].host
+                                                                     : NULL;
+    bool off = false;
+    for (int i = 0; nas != NULL && i < smb_seen_n; i++) {
+        if (strcmp(smb_seen[i].host, nas) == 0) {
+            off = !smb_seen[i].listed;
+        }
+    }
+    ui_lib_top top = {console_ip[0] != '\0' ? console_ip : NULL, nas, off};
+    ui_library_set_top(lib, &top);
+}
+
 /* The library screen, until the user leaves for the dashboard. */
 static void library(game *games, ui_lib_item *items, int count)
 {
@@ -3550,6 +4046,13 @@ static void library(game *games, ui_lib_item *items, int count)
         if (strcmp(footer, drawn) != 0) {
             snprintf(drawn, sizeof drawn, "%s", footer);
             dirty = true;
+        }
+        show_top(&lib, games, count);
+        if (art_frame(&lib, games, count, SDL_GetTicks())) {
+            dirty = true; /* the details have a picture now */
+        }
+        if (ui_library_tick(&lib, SDL_GetTicks())) {
+            dirty = true; /* a long name slides */
         }
         if (dirty) {
             ui_sdl_begin(ui_col_bg);

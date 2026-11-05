@@ -102,8 +102,45 @@ bool ui_list_input(ui_list *l, ui_button b, int rows)
     return moved;
 }
 
+/* The width of a line's text in a list drawn in r: the row less the scroll bar, if any. */
+static int line_w(const ui_draw *d, const ui_list *l, ui_rect r)
+{
+    bool bar = l->count > ui_list_rows(d, r);
+    return (bar ? r.w - BAR_W - 4 : r.w) - 2 * TEXT_IN;
+}
+
+int ui_list_overflow(const ui_draw *d, const ui_list *l, ui_rect r, ui_list_line *line, void *ctx)
+{
+    if (l->count <= 0 || l->cur < 0 || l->cur >= l->count) {
+        return 0;
+    }
+    const char *s = line(ctx, l->cur);
+    int over = d->text_width(d->ctx, UI_FONT_BOLD, s, strlen(s)) - line_w(d, l, r);
+    return over > 0 ? over : 0;
+}
+
+int ui_slide_offset(uint32_t ms, int overflow)
+{
+    if (overflow <= 0) {
+        return 0;
+    }
+    uint32_t travel = (uint32_t)overflow * UI_SLIDE_STEP_MS;
+    uint32_t t = ms % (UI_SLIDE_WAIT_MS + travel + UI_SLIDE_HOLD_MS);
+    if (t < UI_SLIDE_WAIT_MS) {
+        return 0;
+    }
+    t -= UI_SLIDE_WAIT_MS;
+    return t < travel ? (int)(t / UI_SLIDE_STEP_MS) + 1 : overflow;
+}
+
 void ui_list_draw(const ui_draw *d, const ui_list *l, ui_rect r, ui_list_line *line, void *ctx,
                   bool idle)
+{
+    ui_list_draw_slid(d, l, r, line, ctx, idle, 0);
+}
+
+void ui_list_draw_slid(const ui_draw *d, const ui_list *l, ui_rect r, ui_list_line *line, void *ctx,
+                       bool idle, int slide)
 {
     int row_h = ui_list_row_h(d);
     int rows = ui_list_rows(d, r);
@@ -118,9 +155,18 @@ void ui_list_draw(const ui_draw *d, const ui_list *l, ui_rect r, ui_list_line *l
             ui_panel(d, row, 6, idle ? ui_col_idle : ui_col_highlight,
                      idle ? ui_col_idle_border : ui_col_highlight_border);
         }
-        (void)ui_text_fit(d, sel ? UI_FONT_BOLD : UI_FONT_BODY, row.x + TEXT_IN, row.y + 2,
-                          row.w - 2 * TEXT_IN, sel && idle ? ui_col_dim : ui_col_text,
-                          line(ctx, n));
+        ui_font f = sel ? UI_FONT_BOLD : UI_FONT_BODY;
+        ui_color c = sel && idle ? ui_col_dim : ui_col_text;
+        const char *s = line(ctx, n);
+        if (sel && slide > 0) {
+            /* The whole line, moved left and cut at the row's text edges. */
+            ui_rect in = {row.x + TEXT_IN, row.y, row.w - 2 * TEXT_IN, row.h};
+            d->clip(d->ctx, &in);
+            (void)d->text(d->ctx, f, in.x - slide, row.y + 2, c, s, strlen(s));
+            d->clip(d->ctx, &r);
+        } else {
+            (void)ui_text_fit(d, f, row.x + TEXT_IN, row.y + 2, row.w - 2 * TEXT_IN, c, s);
+        }
     }
     if (bar) {
         ui_rect track = {r.x + r.w - BAR_W, r.y, BAR_W, r.h};

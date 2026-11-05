@@ -74,6 +74,10 @@ A reader must accept any valid placement, not just this one. Real images differ.
 
 [`tls/make_certs.sh`](tls/make_certs.sh) makes a small test PKI with OpenSSL: an EC and an RSA test CA, a leaf for `test.example` and `localhost` from each (valid 2026-01-01 to 2036-01-01), and an unrelated CA for "unknown issuer" tests. The output is committed so the tests are deterministic. The leaf keys are stored as binary DER (`*.key.der`), so secret scanners don't take them for leaked keys. **They are test-only and public:** nothing outside the tests may trust these CAs. `core/tests/test_tls.c` uses them against an in-process BearSSL server; the HTTPS test server (M5) will too.
 
+## Art (`core/tests/data/art/`)
+
+[art/make.py](art/make.py) makes the fixtures of `test_picture` ([art.md](../../docs/formats/art.md)): a minimal XBE given a `$$XTIMAGE` by [`tools/ui/xbe_title_image.py`](../ui/xbe_title_image.py) (the tool that gives the app its own title image) and the 128 × 128 PNG in it; a 3 × 2 RGBA PNG; 16 × 16 baseline and progressive JPEGs (Pillow); and a PNG whose header says 4000 × 4000. It also writes the seeds of `fuzz_picture`, `fuzz_xpr`, `fuzz_synopsis`, and a `fuzz_xbe` seed. The output is committed and the same each run (with the same Pillow): `python3 -I tools/fixtures/art/make.py`. `fuzz-seeds/picture/idct-overflow.seed` and `png-empty-idat.seed` are inputs the fuzzer found, kept by hand.
+
 ## Fuzz seeds
 
 [catalog_seeds.py](catalog_seeds.py) writes the committed `core/tests/fuzz-seeds/catalog/` seeds with the catalog pipeline's writer ([`tools/catalog/catalog_bin.py`](../catalog/catalog_bin.py)): placeholder games, a newer minor version, and a few broken files. `xcat-cli catalog` tests run on them too. Rerun it after changing the writer: `python3 -I tools/fixtures/catalog_seeds.py core/tests/fuzz-seeds/catalog`.

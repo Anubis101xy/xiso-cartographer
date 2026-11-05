@@ -5,8 +5,8 @@
 
 /* Single source of truth for the project version; CMakeLists.txt parses these lines. */
 #define XC_VERSION_MAJOR 0
-#define XC_VERSION_MINOR 11
-#define XC_VERSION_PATCH 1
+#define XC_VERSION_MINOR 12
+#define XC_VERSION_PATCH 0
 
 #ifdef __cplusplus
 extern "C" {

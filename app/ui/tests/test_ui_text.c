@@ -71,8 +71,8 @@ static void fake_clip(void *ctx, const ui_rect *r)
     (void)r;
 }
 
-static const ui_draw fake = {NULL,      fake_fill, fake_text, fake_width, fake_line,
-                             fake_clip, NULL,      NULL,      NULL,       NULL};
+static const ui_draw fake = {NULL, fake_fill, fake_text, fake_width, fake_line, fake_clip,
+                             NULL, NULL,      NULL,      NULL,       NULL};
 static const ui_color white = {255, 255, 255, 255};
 
 /* The text of every draw since the last call, joined with "|". */

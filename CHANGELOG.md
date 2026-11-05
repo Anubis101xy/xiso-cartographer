@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-05
+
+### Added
+
+- **Game art and details** ([ADR 0019](docs/adr/0019-game-art.md), [art.md](docs/formats/art.md)). When the highlight rests on a game in GAMES or INSTALLED, its details show a picture and what the game's own files say, read from the NAS or the console's drive:
+  - the picture: a cover beside the game (`<name>.jpg`, `.png` or `.tbn` next to an image; for a game folder, or an image in a folder of its own, XBMC4Gamers' `_resources/artwork/poster.jpg`, `default.tbn`, `cover.jpg`/`.png`, `folder.jpg`/`.png`), else the title image inside its `default.xbe` (an XPR0 texture, [xpr.md](docs/formats/xpr.md));
+  - the heading: the game's real title, from an XBMC4Gamers synopsis (`_resources/default.xml`, [synopsis.md](docs/formats/synopsis.md)) or the XBE's certificate;
+  - its region (NTSC-U, NTSC-J, PAL, region free), title ID and disc number from the XBE ([xbe.md](docs/formats/xbe.md) §4–§5), and from a synopsis who made it, genre, year, players, ESRB, rating and the overview. White and Black scroll text that doesn't fit.
+  - A disc image's `default.xbe` is read from its root without listing the image ([xdvdfs.md §10](docs/formats/xdvdfs.md#10-a-name-in-the-root)). Archives' XBEs aren't read (they're compressed); what's beside them is.
+  - JPEG (baseline and progressive) and PNG are decoded by stb_image v2.30 (`third_party/stb`, public domain or MIT), JPEG and PNG only, within a 4 MiB file, 2048-pixel side and 32 MiB memory limit. Read once the highlight has rested 350 ms, the last 12 games' art kept.
+- **A panel at the top** of the library, right of the title: the console's address, the NAS of the highlighted game (or the map's first) with "off" if its folders didn't list, and the free space on the install drive (and E:) with a bar. The title tab is narrower to make room.
+- **Long names slide:** a highlighted line too long for the list scrolls sideways to its end after a moment, then back, in every list.
+- New fuzzers: `fuzz_picture`, `fuzz_xpr`, `fuzz_synopsis`; `fuzz_xbe` covers the region and sections.
+
+### Changed
+
+- GAMES and INSTALLED are in alphabetical order: case folded, numbers by value ("Halo 2" before "Halo 10").
+- A game's facts are separated by " · " rather than "  |  ", so year, region and size fit the details.
+- The search panel sits where the top panel is.
+
 ## [0.11.1] - 2026-11-02
 
 ### Added
